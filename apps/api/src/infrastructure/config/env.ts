@@ -9,6 +9,8 @@ export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   DATABASE_URL: z.string().startsWith('postgresql://'),
+  /** Rôle ghmt_platform : schéma platform uniquement (console Super Administrateur, abonnements, paiements). */
+  PLATFORM_DATABASE_URL: z.string().startsWith('postgresql://'),
   JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET doit contenir au moins 32 caractères'),
   JWT_ISSUER: z.string().min(1),
   JWT_AUDIENCE: z.string().min(1),

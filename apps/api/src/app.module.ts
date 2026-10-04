@@ -16,6 +16,10 @@ import { AuthModule } from './modules/auth/auth.module';
 import { IamModule } from './modules/iam/iam.module';
 import { OrgModule } from './modules/org/org.module';
 import { PatientsModule } from './modules/patients/patients.module';
+import { BillingModule } from './modules/billing/billing.module';
+import { PaymentsModule } from './modules/payments/payments.module';
+import { PlatformModule } from './modules/platform/platform.module';
+import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
 
 const DEFAULT_RATE_LIMIT = { ttl: 60_000, limit: 300 } as const;
 
@@ -36,6 +40,10 @@ const DEFAULT_RATE_LIMIT = { ttl: 60_000, limit: 300 } as const;
     IamModule,
     PatientsModule,
     AppointmentsModule,
+    PlatformModule,
+    SubscriptionsModule,
+    PaymentsModule,
+    BillingModule,
   ],
   controllers: [HealthController],
   providers: [

@@ -3,6 +3,7 @@ import { loadEnv } from './env';
 
 const BASE = {
   DATABASE_URL: 'postgresql://ghmt_app:x@localhost:5432/ghmt_test',
+  PLATFORM_DATABASE_URL: 'postgresql://ghmt_platform:x@localhost:5432/ghmt_test',
   JWT_ACCESS_SECRET: 'x'.repeat(32),
   JWT_ISSUER: 'https://api.ghmt.local',
   JWT_AUDIENCE: 'ghmt-api',

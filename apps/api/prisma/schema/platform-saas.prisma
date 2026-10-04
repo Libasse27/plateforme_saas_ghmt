@@ -1,0 +1,345 @@
+// Équipe A (docs/09 §A) : realm plateforme, plans, abonnements, factures SaaS.
+// Règle : aucun champ de relation vers les modèles de core.prisma ; les clés étrangères vers
+// platform.tenants sont créées en SQL dans la migration 20261005000100_platform_saas.
+
+enum PlatformRole {
+  super_admin
+  support
+  billing
+
+  @@map("platform_role")
+  @@schema("platform")
+}
+
+enum PlatformUserStatus {
+  active
+  disabled
+
+  @@map("platform_user_status")
+  @@schema("platform")
+}
+
+enum SubscriptionStatus {
+  trial
+  active
+  past_due
+  grace
+  suspended
+  cancelled
+  expired
+
+  @@map("subscription_status")
+  @@schema("platform")
+}
+
+enum BillingPeriod {
+  monthly
+  yearly
+
+  @@map("billing_period")
+  @@schema("platform")
+}
+
+enum PlanTier {
+  basic
+  standard
+  professional
+  enterprise
+
+  @@map("plan_tier")
+  @@schema("platform")
+}
+
+enum SaasInvoiceStatus {
+  draft
+  open
+  paid
+  void
+  uncollectible
+
+  @@map("saas_invoice_status")
+  @@schema("platform")
+}
+
+enum SaasInvoiceKind {
+  renewal
+  conversion
+  upgrade_prorata
+
+  @@map("saas_invoice_kind")
+  @@schema("platform")
+}
+
+enum ManualPaymentStatus {
+  pending
+  validated
+  rejected
+
+  @@map("manual_payment_status")
+  @@schema("platform")
+}
+
+enum ManualPaymentMethod {
+  bank_transfer
+  cash_reseller
+  cheque
+  other
+
+  @@map("manual_payment_method")
+  @@schema("platform")
+}
+
+// ───────────── A1 : realm plateforme ─────────────
+model PlatformUser {
+  id                String             @id @default(uuid(7)) @db.Uuid
+  email             String             @unique @db.Citext
+  passwordHash      String             @map("password_hash")
+  fullName          String             @map("full_name")
+  role              PlatformRole
+  status            PlatformUserStatus @default(active)
+  failedAttempts    Int                @default(0) @map("failed_attempts")
+  lockedUntil       DateTime?          @map("locked_until") @db.Timestamptz(6)
+  mfaSecretEnc      Bytes?             @map("mfa_secret_enc")
+  mfaLastUsedStep   BigInt?            @map("mfa_last_used_step")
+  mfaBackupHashes   String[]           @default([]) @map("mfa_backup_code_hashes")
+  mfaActivatedAt    DateTime?          @map("mfa_activated_at") @db.Timestamptz(6)
+  lastLoginAt       DateTime?          @map("last_login_at") @db.Timestamptz(6)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  sessions   PlatformSession[]
+  challenges PlatformMfaChallenge[]
+
+  @@map("platform_users")
+  @@schema("platform")
+}
+
+model PlatformSession {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  userAgent     String?   @map("user_agent")
+  ip            String?   @db.Inet
+  mfaVerifiedAt DateTime? @map("mfa_verified_at") @db.Timestamptz(6)
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(6)
+  revokedReason String?   @map("revoked_reason")
+  lastSeenAt    DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user          PlatformUser           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokens PlatformRefreshToken[]
+
+  @@index([userId])
+  @@map("platform_sessions")
+  @@schema("platform")
+}
+
+model PlatformRefreshToken {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  sessionId    String    @map("session_id") @db.Uuid
+  tokenHash    Bytes     @unique @map("token_hash")
+  familyId     String    @map("family_id") @db.Uuid
+  issuedAt     DateTime  @default(now()) @map("issued_at") @db.Timestamptz(6)
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt       DateTime? @map("used_at") @db.Timestamptz(6)
+  replacedById String?   @map("replaced_by_id") @db.Uuid
+
+  session PlatformSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([familyId])
+  @@map("platform_refresh_tokens")
+  @@schema("platform")
+}
+
+model PlatformMfaChallenge {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tokenHash  Bytes     @unique @map("token_hash")
+  attempts   Int       @default(0)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(6)
+  userAgent  String?   @map("user_agent")
+  ip         String?   @db.Inet
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user PlatformUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("platform_mfa_challenges")
+  @@schema("platform")
+}
+
+/// Journal d'audit plateforme, ajout seul (trigger). Aucune donnée clinique.
+model PlatformAuditLog {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  occurredAt  DateTime @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  actorType   String   @map("actor_type")
+  actorUserId String?  @map("actor_user_id") @db.Uuid
+  actorRole   String?  @map("actor_role")
+  action      String
+  resourceType String? @map("resource_type")
+  resourceId  String?  @map("resource_id")
+  tenantId    String?  @map("tenant_id") @db.Uuid
+  outcome     String   @default("success")
+  ip          String?  @db.Inet
+  requestId   String?  @map("request_id")
+  changes     Json?
+
+  @@index([occurredAt(sort: Desc)])
+  @@index([tenantId, occurredAt(sort: Desc)])
+  @@index([actorUserId, occurredAt(sort: Desc)])
+  @@map("audit_logs")
+  @@schema("platform")
+}
+
+// ───────────── A2 : plans ─────────────
+model Plan {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  code         String
+  version      Int       @default(1)
+  name         String
+  tier         PlanTier
+  priceMonthly Decimal   @map("price_monthly") @db.Decimal(18, 2)
+  priceYearly  Decimal   @map("price_yearly") @db.Decimal(18, 2)
+  currency     String    @db.Char(3)
+  entitlements Json
+  isPublic     Boolean   @default(true) @map("is_public")
+  archivedAt   DateTime? @map("archived_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([code, version])
+  @@map("plans")
+  @@schema("platform")
+}
+
+// ───────────── A3 : abonnements ─────────────
+model Subscription {
+  id                      String             @id @default(uuid(7)) @db.Uuid
+  tenantId                String             @unique @map("tenant_id") @db.Uuid
+  planId                  String             @map("plan_id") @db.Uuid
+  status                  SubscriptionStatus
+  billingPeriod           BillingPeriod      @default(monthly) @map("billing_period")
+  currentPeriodStart      DateTime           @map("current_period_start") @db.Timestamptz(6)
+  currentPeriodEnd        DateTime           @map("current_period_end") @db.Timestamptz(6)
+  trialEndsAt             DateTime?          @map("trial_ends_at") @db.Timestamptz(6)
+  trialExtended           Boolean            @default(false) @map("trial_extended")
+  cancelAtPeriodEnd       Boolean            @default(false) @map("cancel_at_period_end")
+  pendingPlanId           String?            @map("pending_plan_id") @db.Uuid
+  pendingBillingPeriod    BillingPeriod?     @map("pending_billing_period")
+  overrides               Json?
+  statusChangedAt         DateTime           @default(now()) @map("status_changed_at") @db.Timestamptz(6)
+  /// Motif d'une suspension décidée par la plateforme : une facture payée ne lève pas ce blocage.
+  manualSuspensionReason  String?            @map("manual_suspension_reason")
+  createdAt               DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([status, currentPeriodEnd])
+  @@map("subscriptions")
+  @@schema("platform")
+}
+
+// ───────────── A4 : factures SaaS ─────────────
+model BillingEntity {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  countryCode  String   @unique @map("country_code") @db.Char(2)
+  legalName    String   @map("legal_name")
+  currency     String   @db.Char(3)
+  /// Taux de TVA décimal, ex. 0.1800.
+  taxRate      Decimal  @map("tax_rate") @db.Decimal(6, 4)
+  taxId        String?  @map("tax_id")
+  legalMentions String? @map("legal_mentions")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("billing_entities")
+  @@schema("platform")
+}
+
+/// Compteur de numérotation sans trou, verrouillé par ligne (une par pays et par année).
+model SaasInvoiceCounter {
+  countryCode String   @map("country_code") @db.Char(2)
+  year        Int
+  lastValue   Int      @default(0) @map("last_value")
+  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@id([countryCode, year])
+  @@map("saas_invoice_counters")
+  @@schema("platform")
+}
+
+model SaasInvoice {
+  id             String            @id @default(uuid(7)) @db.Uuid
+  number         String            @unique
+  tenantId       String            @map("tenant_id") @db.Uuid
+  subscriptionId String            @map("subscription_id") @db.Uuid
+  planId         String            @map("plan_id") @db.Uuid
+  countryCode    String            @map("country_code") @db.Char(2)
+  status         SaasInvoiceStatus @default(open)
+  kind           SaasInvoiceKind
+  billingPeriod  BillingPeriod     @map("billing_period")
+  currency       String            @db.Char(3)
+  subtotal       Decimal           @db.Decimal(18, 2)
+  taxRate        Decimal           @map("tax_rate") @db.Decimal(6, 4)
+  taxAmount      Decimal           @map("tax_amount") @db.Decimal(18, 2)
+  total          Decimal           @db.Decimal(18, 2)
+  /// Période couverte par la facture (renouvellement/conversion) ou reste de la période (prorata).
+  periodStart    DateTime          @map("period_start") @db.Timestamptz(6)
+  periodEnd      DateTime          @map("period_end") @db.Timestamptz(6)
+  issuedAt       DateTime          @map("issued_at") @db.Timestamptz(6)
+  dueAt          DateTime          @map("due_at") @db.Timestamptz(6)
+  paidAt         DateTime?         @map("paid_at") @db.Timestamptz(6)
+  voidedAt       DateTime?         @map("voided_at") @db.Timestamptz(6)
+  paymentChannel String?           @map("payment_channel")
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  lines          SaasInvoiceLine[]
+  manualPayments ManualPayment[]
+
+  @@index([tenantId, issuedAt(sort: Desc)])
+  @@index([status, dueAt])
+  @@index([subscriptionId])
+  @@map("saas_invoices")
+  @@schema("platform")
+}
+
+model SaasInvoiceLine {
+  id          String @id @default(uuid(7)) @db.Uuid
+  invoiceId   String @map("invoice_id") @db.Uuid
+  position    Int
+  description String
+  quantity    Int    @default(1)
+  unitPrice   Decimal @map("unit_price") @db.Decimal(18, 2)
+  amount      Decimal @db.Decimal(18, 2)
+
+  invoice SaasInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@unique([invoiceId, position])
+  @@map("saas_invoice_lines")
+  @@schema("platform")
+}
+
+/// Paiement manuel (virement, espèces revendeur) : saisi par un utilisateur, validé par un AUTRE (quatre yeux).
+model ManualPayment {
+  id            String              @id @default(uuid(7)) @db.Uuid
+  invoiceId     String              @map("invoice_id") @db.Uuid
+  tenantId      String              @map("tenant_id") @db.Uuid
+  amount        Decimal             @db.Decimal(18, 2)
+  currency      String              @db.Char(3)
+  method        ManualPaymentMethod
+  reference     String
+  receivedAt    DateTime            @map("received_at") @db.Timestamptz(6)
+  status        ManualPaymentStatus @default(pending)
+  enteredBy     String              @map("entered_by") @db.Uuid
+  validatedBy   String?             @map("validated_by") @db.Uuid
+  decidedAt     DateTime?           @map("decided_at") @db.Timestamptz(6)
+  rejectionReason String?           @map("rejection_reason")
+  createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  invoice SaasInvoice @relation(fields: [invoiceId], references: [id])
+
+  @@index([invoiceId])
+  @@index([status])
+  @@map("manual_payments")
+  @@schema("platform")
+}

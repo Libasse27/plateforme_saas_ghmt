@@ -410,6 +410,83 @@ Corps `{ q?: string(2..100), phone?: E.164, ipp?: /^P\d{2}-\d{7}$/, limit?: 1..1
 
 **Authentification** — seul `Authorization: Bearer` authentifie ; aucun cookie n'est lu.
 
+**Facturation patient, caisse et paiements (docs/09 §C, priment sur 4.12 et 4.23)** — chemins sous `/api/v1`, montants en chaînes décimales à 2 décimales (`"25000.00"`), quantités en chaînes (≤ 3 décimales), devise = `baseCurrency` du tenant. Identifiants mal formés ⇒ `404`. Ressource d'un autre tenant ou hors périmètre de site ⇒ `404`.
+
+| Méthode | Chemin | Permission | Description |
+|---|---|---|---|
+| GET / POST | `/billing/price-lists` | `billing:price_list:read` / `update` | Grilles ; `isDefault` unique par tenant (en désigner une retire l'ancienne) ; `409 price_list_code_taken` |
+| PATCH | `/billing/price-lists/{id}` | `billing:price_list:update` | `name`, `isDefault`, `isActive` |
+| GET / POST | `/billing/price-lists/{id}/items` | `read` / `update` | Articles (`category`, `q`, `includeInactive`, `limit`, `cursor` = code) ; `409 price_list_item_code_taken` |
+| PATCH | `/billing/price-list-items/{id}` | `billing:price_list:update` | Le changement de prix est audité (`unitPrice.from/to`) ; les factures existantes gardent leur prix figé |
+| POST | `/billing/invoices` | `billing:invoice:create` | Brouillon `{ patientId, siteId, appointmentId?, notes?, lines[] }` ; ligne = `{ priceListItemId, quantity? }` ou ligne libre `{ description, category?, unitPrice, quantity? }` (`403 free_line_forbidden` sans `billing:invoice:update`) ; totaux calculés côté serveur ; `422` sur `lines.N.priceListItemId` (inconnu, inactif, autre devise) |
+| GET | `/billing/invoices` | `billing:invoice:read` | Filtres `status`, `patientId`, `siteId` ; curseur UUID ; sans lignes |
+| GET | `/billing/invoices/{id}` | `billing:invoice:read` | Détail (lignes, paiements, `patient { id, ipp, fullName }`) ; audit `invoice.read` avec le patient |
+| PUT | `/billing/invoices/{id}/lines` | `billing:invoice:create` | Remplace les lignes d'un brouillon (`409 invoice_not_draft` sinon) |
+| POST | `/billing/invoices/{id}/issue` | `billing:invoice:create` | Émission : numéro `FAC-{AAAA}-{000001}` via `tenant.next_sequence('invoice', AAAA)` (année civile locale du tenant, sans trou sous concurrence : verrou de ligne puis numéro, une émission perdante ne consomme rien) ; total nul ⇒ `paid` ; facture émise immuable (trigger) |
+| POST | `/billing/invoices/{id}/void` | `billing:invoice:validate` | Annulation `{ reason }` (`409 invoice_has_payments` si encaissement réussi ou en attente, `409 invoice_already_void`) ; le numéro n'est jamais réattribué |
+| GET | `/billing/invoices/{id}/receipt` | `billing:invoice:print` | Reçu `{ establishment, site, invoice, printedAt }` ; audit `invoice.printed` |
+| POST | `/billing/invoices/{id}/payments` | `cashier:payment:create` | `{ method: cash \| mobile_money \| card \| other, amount, cashSessionId?, payerPhone?, reference? }` (voir ci-dessous) |
+| POST | `/billing/payments/{id}/refresh` | `cashier:payment:create` | Reprise manuelle d'un paiement en ligne (webhook perdu) : re-vérification serveur à serveur, renvoie le paiement |
+| GET / POST | `/cashier/registers` | `cashier:cash_session:read` / `validate` | Caisses d'un site ; `409 cash_register_code_taken` |
+| GET / POST | `/cashier/sessions` | `read` / `create` | Ouverture `{ cashRegisterId, openingFloat }` ; une seule session ouverte par caisse (`409 cash_session_already_open`, garanti par index unique partiel) ; filtres `status`, `mine` |
+| GET | `/cashier/sessions/{id}` | `cashier:cash_session:read` | `expectedTotal` = fond + espèces encaissées (figé à la clôture) |
+| POST | `/cashier/sessions/{id}/close` | `cashier:cash_session:create` | `{ countedAmount, note? }` par l'ouvreur seul (`403 cash_session_not_owner`, `409 cash_session_not_open`) ; `variance` = compté − attendu |
+| POST | `/cashier/sessions/{id}/validate` | `cashier:cash_session:validate` | Par un autre utilisateur que l'ouvreur et le clôturant (`403 separation_of_duties`, aussi garanti par contrainte SQL) ; `409 cash_session_not_closed` |
+| POST | `/webhooks/payments/{provider}` | `@Public`, signature | Webhook agrégateur : signature à temps constant sur le corps brut, événement stocké (`UNIQUE (provider, provider_event_id)`), re-vérification du statut auprès du fournisseur, contrôle exact montant + devise, transition idempotente, publication de `payment.succeeded` / `payment.failed` ; limité en débit |
+| POST | `/webhooks/payments/sandbox/simulate` | `@Public` | `{ attemptId, outcome: success \| failure }` ; fournisseur simulé, **404 si `PAYMENTS_SANDBOX_ENABLED` est faux** (refusé au démarrage en production) |
+
+Encaissement : le montant ne peut dépasser le reste dû, déduction faite des paiements en ligne `pending` (qui réservent leur montant : `422 amount_exceeds_balance`, `details.balance`). Facture non émise, soldée ou annulée ⇒ `409 invoice_not_payable`. Espèces : `cashSessionId` obligatoire (`422`), session ouverte (`409 cash_session_not_open`) et ouverte par l'encaisseur (`403 cash_session_not_owned`) ; la base refuse un paiement en espèces sans session. Réponse `201` : espèces/autre ⇒ `InvoicePaymentView` ; Mobile Money/carte ⇒ `{ payment (pending), checkoutUrl, instructions }` (une seule demande en attente par facture : `409 payment_already_pending`). La confirmation arrive par `payment.succeeded` (réaction du module billing dans `TenantDb.runAs(tenantId)`) : paiement `succeeded`, facture recalculée (`partially_paid` / `paid`), audit `payment.succeeded` (acteur `system`, `anomaly: overpaid` si excédent). `payment.failed` ⇒ paiement `failed` avec motif. Aucune donnée patient dans `platform.*` : libellé `Facture FAC-…`, téléphone haché (HMAC) uniquement. Les paiements et sessions validées sont immuables (triggers) ; aucune suppression par l'application.
+
+Variables d'environnement : `PAYMENTS_SANDBOX_ENABLED`, `PAYMENTS_ROUTES` (JSON `PAYS:DEVISE` / `DEVISE` / `*` ⇒ fournisseurs par ordre, repli sur le suivant), `CINETPAY_API_KEY`, `CINETPAY_SITE_ID`, `CINETPAY_SECRET_KEY`, `CINETPAY_BASE_URL`, `CINETPAY_NOTIFY_URL`, `CINETPAY_RETURN_URL` (adaptateur inactif tant qu'elles ne sont pas toutes renseignées). Job de relance : toutes les 10 min, tentatives `pending` > 10 min re-vérifiées pendant 24 h puis expirées (`expired`), règlements non notifiés republiés.
+
+**Realm plateforme, abonnements et factures SaaS (docs/09 §A, priment sur 4.2)** — chemins sous `/api/v1`. Montants en chaînes décimales (`"88500.00"`), taux en chaînes (`"0.1800"`), dates ISO 8601 UTC. Le tenant d'une route `/subscription/*` vient du jeton ; un identifiant mal formé ⇒ `404`.
+
+*Authentification plateforme* — JWT `realm: 'platform'` (claims `{ sub, sid, role, mfa }`, audience `<JWT_AUDIENCE>-platform`), refresh tokens opaques `p.<secret>` (rotation, tolérance de rejeu 10 s, réutilisation ⇒ session révoquée). Sessions de 12 h, refresh glissant de 2 h. **Un jeton tenant est refusé (401) sur `/platform/*` et un jeton plateforme sur toute route tenant (401).** Les routes `/platform/*` portent `@PlatformController()` (= `@PlatformRealm()` + `PlatformAuthGuard`, indissociables) ; refus par défaut sans `@RequirePlatformPermission`, `@PlatformAuthenticatedOnly` ou `@PlatformPublic`. Le rôle est relu en base à chaque requête (rétrogradation immédiate). Aucun endpoint de création de compte : script `apps/api/scripts/create-platform-admin.mts`.
+
+| Méthode | Chemin | Accès | Description |
+|---|---|---|---|
+| POST | `/platform/auth/login` | public, 10/15 min/IP | `{ email, password }` ⇒ **toujours** une étape MFA : compte enrôlé ⇒ `{ mfaRequired: true, challengeId, methods: ['totp','backup_code'] }` ; compte sans TOTP ⇒ `{ accessToken, refreshToken, expiresIn, mfaEnrolled: false, mfaRequired: true }` (jeton limité à l'enrôlement). `401 invalid_credentials` identique pour compte inconnu / mauvais mot de passe / désactivé / verrouillé (5 échecs ⇒ 1, 5, 15, 60 min) |
+| POST | `/platform/auth/mfa/verify` | public | `{ challengeId, code }` (TOTP 6 chiffres ou code de secours) ⇒ jetons `mfa: true` ; 5 essais par challenge (TTL 5 min) ; `401 invalid_mfa_code` |
+| POST | `/platform/auth/mfa/totp/setup` · `/activate` | session sans MFA | Enrôlement ; `activate { code }` ⇒ `{ accessToken, expiresIn, backupCodes[10] }` (codes affichés une fois) |
+| POST | `/platform/auth/refresh` · `/logout` | public | Rotation ; `logout` (204, idempotent) par refresh token ou jeton d'accès |
+| GET | `/platform/auth/me` | session | `{ id, email, fullName, role, mfaEnrolled, mfaVerified, permissions[] }` |
+
+*Matrice* : `super_admin` = tout ; `support` = `tenants:read`, `subscriptions:read`, `plans:read`, `dashboard:read` ; `billing` = `tenants:read`, `plans:read|write`, `subscriptions:read|write`, `invoices:read|write|validate`, `dashboard:read`. Toute route métier exige la MFA vérifiée (`403 mfa_enrollment_required`), un refus de permission est audité (`platform.authz.denied`).
+
+*Console* (`PlatformDb`, rôle `ghmt_platform`) :
+
+| Méthode | Chemin | Permission | Description |
+|---|---|---|---|
+| GET | `/platform/tenants` | `tenants:read` | Liste paginée (`q`, `status`, `subscriptionStatus`, `limit`, `cursor` UUID) : `{ id, slug, name, establishmentType, countryCode, status, createdAt, subscription: { status, planCode, currentPeriodEnd } \| null }` |
+| GET | `/platform/tenants/{id}` | `tenants:read` | Détail : `tenant` (+ `legalName`, `baseCurrency`, `timezone`, `suspensionReason`), `subscription` (vue plateforme), `usage { users, sites, patients, appointmentsThisMonth, appointmentsLast30Days }` (comptes uniquement), `modules[]`, `invoices { open, overdue }` |
+| POST | `/platform/tenants/{id}/suspend` | `tenants:suspend` | `{ reason (5..500) }` ⇒ lecture seule ; `409 already_suspended`. Le motif est conservé : un paiement ne lève pas cette suspension |
+| POST | `/platform/tenants/{id}/reactivate` | `tenants:suspend` | `409 not_manually_suspended` ; l'établissement reste en lecture seule si l'abonnement est lui-même `suspended` / `expired` |
+| GET / POST | `/platform/plans` | `plans:read` / `plans:write` | Liste (`includeArchived`) ; `POST` crée la **version suivante** d'un code (ou la v1 d'un nouveau code) et archive la précédente ; `422` si `billing`/`cashier` manquent ou module inconnu ; `409 plan_version_conflict` |
+| GET | `/platform/subscriptions/{tenantId}` | `subscriptions:read` | `SubscriptionView` + `tenantId`, `trialExtended`, `suspensionReason` |
+| POST | `/platform/subscriptions/{tenantId}/change` | `subscriptions:write` | `{ planCode, billingPeriod, overrides? }` (plans non publics autorisés, dérogations `{ modules?, limits?, features? }` ; `overrides: null` les efface) ⇒ `{ effect, subscription, invoice }` |
+| POST | `/platform/subscriptions/{tenantId}/extend-trial` | `subscriptions:write` | +15 jours, une seule fois (`409 trial_already_extended`, `409 not_in_trial`) |
+| GET | `/platform/invoices` · `/{id}` | `invoices:read` | Factures SaaS (`status`, `tenantId`, curseur `issuedAt\|id`), `tenantSlug` inclus, jamais les brouillons |
+| POST | `/platform/invoices/{id}/manual-payments` | `invoices:write` | `{ amount, method: bank_transfer \| cash_reseller \| cheque \| other, reference, receivedAt }` ⇒ `201` paiement `pending` ; montant **exactement** celui de la facture (`422 amount_mismatch`), facture payable (`409 invoice_not_payable`), un seul paiement en attente par facture (`409 manual_payment_pending`) |
+| GET | `/platform/invoices/manual-payments` | `invoices:read` | Filtre `status` |
+| POST | `/platform/invoices/manual-payments/{id}/validate` · `/reject` | `invoices:validate` | **Quatre yeux** : le décideur ≠ le saisisseur (`403 four_eyes_required`, tracé `manual_payment.four_eyes_denied`, aussi garanti par CHECK SQL) ; `validate` règle la facture et active l'abonnement dans la même transaction ; `reject { reason }` ; `409 manual_payment_decided` |
+| GET | `/platform/dashboard` | `dashboard:read` | `{ tenants { total, active, trial, suspended }, users, patients, appointmentsLast30Days, mrr { XOF: "…" }, arr, overdueInvoices }` (agrégats via `platform.tenants_usage`, `SECURITY DEFINER`, comptes uniquement) |
+| GET | `/platform/dashboard/audit-logs` | `audit:read` | Journal `platform.audit_logs` (`tenantId`, `action`, curseur UUID) |
+
+*Surface tenant* (`settings:establishment:read` / `update`) :
+
+| Méthode | Chemin | Permission | Description |
+|---|---|---|---|
+| GET | `/subscription` | `read` | `{ id, status, billingPeriod, currentPeriodStart/End, trialEndsAt, cancelAtPeriodEnd, plan, pendingChange, entitlements, usage { users, sites, appointmentsThisMonth } }` |
+| GET | `/subscription/plans` | `read` | Offres publiques en vigueur `PlanSummary + entitlements` |
+| POST | `/subscription/change` | `update` | `{ planCode, billingPeriod }` ⇒ `{ effect: immediate \| scheduled \| pending_payment, subscription, invoice \| null }`. Essai : immédiat + facture de conversion. Upgrade : immédiat + facture de prorata. Downgrade / périodicité : fin de période, `409 downgrade_incompatible` (`details.violations: [{ metric: users \| sites, limit, current }]`). Expiré / suspendu / résilié : `pending_payment`. `409 no_change`, `404` plan inconnu ou non public. Autorisé même tenant suspendu |
+| POST | `/subscription/cancel` · `/resume` | `update` | Résiliation à l'échéance (`409 invalid_state` hors `active`) |
+| GET | `/subscription/invoices` | `read` | Factures (jamais les brouillons), `status`, curseur |
+| POST | `/subscription/invoices/{id}/pay` | `update` | `{ payerPhone (E.164) }` ⇒ `PAYMENTS_GATEWAY.initiate({ purpose: 'saas_invoice', … })` ⇒ `{ attemptId, status, provider, checkoutUrl, instructions }` ; `404` facture d'un autre tenant, `409 invoice_not_payable`, `503 payments_unavailable`. Autorisé tenant suspendu. Clé d'idempotence stable 5 min |
+
+*Limites du plan* : refus `403 plan_limit_reached` avec `details { metric: users \| sites \| appointmentsMonthly, limit, current }` — utilisateurs (actifs + invités + verrouillés, y compris la réactivation d'un compte désactivé) et sites : limites **dures** (verrou d'avis par tenant) ; rendez-vous du mois : limite **souple**, au-delà de 120 % seules les sources `web` / `mobile_app` sont refusées (guichet et téléphone jamais). Patients actifs : informatif. Tenant sans abonnement (historique) : aucune limite.
+
+*Cycle de vie* (`SubscriptionStateMachine`, job horaire `runLifecycle(now)`) : `trial → active | expired` ; `active → active | past_due | cancelled` ; `past_due → active | grace` (J+7 après la fin de période) ; `grace → active | suspended` (J+15) ; `suspended → active | expired` (J+75) ; `cancelled → active | expired` (90 j après la résiliation) ; `expired → active`. Factures émises à J-7 (renouvellement ou conversion d'essai), prorata à l'upgrade ; numéro `GHMT-{PAYS}-{AAAA}-{000001}` sans trou (compteur verrouillé dans la transaction d'émission), TVA de `platform.billing_entities` (repli `ZZ`). `payment.succeeded` (`saas_invoice`) ou validation d'un paiement manuel ⇒ facture `paid`, abonnement `active`, nouvelle période = ancienne fin + durée (réactivation : à partir du paiement), idempotent. `suspended` / `expired` ⇒ `platform.tenants.status = 'suspended'` (lecture seule ; `403 subscription_suspended` sauf création de patient, encaissement, ouverture de caisse, lectures, exports et impressions, et les routes `@AllowWhenSuspended` d'abonnement). `grace` ⇒ `403 subscription_grace` pour la création / invitation d'utilisateurs et les exports. Événement `subscription.status_changed` publié après commit.
+
 ### 4.1 Auth (`/auth`)
 
 | Méthode | Chemin | Permission | Description |

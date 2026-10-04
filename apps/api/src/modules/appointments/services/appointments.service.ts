@@ -9,6 +9,7 @@ import type {
 } from '@ghmt/shared';
 import { AuditService } from '../../../common/audit/audit.service';
 import { scopesFor } from '../../../common/authz/authorization.service';
+import { EntitlementService } from '../../../common/authz/entitlement.service';
 import { RequestContext } from '../../../common/context/request-context';
 import { DomainError } from '../../../common/errors/domain-error';
 import { Page, decodeDateIdCursor } from '../../../common/pagination/page';
@@ -41,6 +42,7 @@ export class AppointmentsService {
     private readonly audit: AuditService,
     private readonly context: RequestContext,
     private readonly clock: Clock,
+    private readonly entitlements: EntitlementService,
   ) {}
 
   create(input: CreateAppointmentInput): Promise<AppointmentView> {
@@ -63,6 +65,8 @@ export class AppointmentsService {
       if (!patient) throw refNotFound('patientId', 'Patient introuvable.');
       assertPatientAlive(patient);
       assertSlotNotInPast(new Date(input.startsAt), this.clock.now());
+      // Limite souple du plan : au-delà de 120 % du quota mensuel, les sources en ligne sont refusées (jamais le guichet).
+      await this.entitlements.assertAppointmentAllowed(tx, { source: input.source, startsAt: new Date(input.startsAt) });
 
       // Le chevauchement est tranché par la contrainte EXCLUDE (23P01 ⇒ 409 slot_unavailable).
       const row = await this.repo.create(tx, {

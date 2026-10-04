@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { isPermissionKey, moduleOf, type PermissionKey } from '@ghmt/shared';
+import { isPermissionKey, moduleOf, type PermissionKey, type SubscriptionStatus } from '@ghmt/shared';
 import type { TenantTx } from '../../infrastructure/prisma/tenant-db.service';
 import type {
   AuthorizationDecision,
@@ -12,13 +12,36 @@ import type {
  * Évaluation pure (docs/04 §3.8, étapes 1 à 4) : statut du tenant, module souscrit,
  * permission présente, MFA exigée par un rôle. Toutes les permissions requises doivent être détenues.
  */
+/**
+ * Écritures qui restent autorisées quand le tenant est suspendu (continuité des soins, docs/05 A6 et docs/09 §A3) :
+ * enregistrer un patient (urgence) et encaisser. L'ouverture de caisse est nécessaire à l'encaissement en espèces.
+ */
+const SUSPENDED_ALLOWED_WRITES: ReadonlySet<string> = new Set(['patients:patient:create', 'cashier:payment:create', 'cashier:cash_session:create']);
+
+/** Actions sans effet sur les données : permises en suspension (l'administrateur doit pouvoir exporter et imprimer). */
+const SUSPENDED_ALLOWED_ACTIONS: ReadonlySet<string> = new Set(['read', 'print', 'export']);
+
+/** Actions administratives non essentielles bloquées en période de grâce : création/invitation d'utilisateurs et exports. */
+const GRACE_BLOCKED_PERMISSIONS: ReadonlySet<string> = new Set(['iam:user:create', 'iam:invitation:create']);
+
+function isRestrictedInSuspension(permission: PermissionKey): boolean {
+  const action = permission.slice(permission.lastIndexOf(':') + 1);
+  return !SUSPENDED_ALLOWED_ACTIONS.has(action) && !SUSPENDED_ALLOWED_WRITES.has(permission);
+}
+
+function isBlockedInGrace(permission: PermissionKey): boolean {
+  return GRACE_BLOCKED_PERMISSIONS.has(permission) || permission.endsWith(':export');
+}
+
 export function evaluateAuthorization(input: AuthorizationInput): AuthorizationDecision {
-  const { required, grants, enabledModules, tenantStatus, mfaVerified } = input;
+  const { required, grants, enabledModules, tenantStatus, mfaVerified, subscriptionStatus, allowWhenSuspended } = input;
   if (tenantStatus !== 'active' && tenantStatus !== 'suspended') return { allowed: false, reason: 'tenant_inactive' };
 
   for (const permission of required) {
-    const isRead = permission.endsWith(':read');
-    if (tenantStatus === 'suspended' && !isRead) return { allowed: false, reason: 'subscription_suspended', permission };
+    if (tenantStatus === 'suspended' && !allowWhenSuspended && isRestrictedInSuspension(permission)) {
+      return { allowed: false, reason: 'subscription_suspended', permission };
+    }
+    if (subscriptionStatus === 'grace' && isBlockedInGrace(permission)) return { allowed: false, reason: 'subscription_grace', permission };
     if (!enabledModules.has(moduleOf(permission))) return { allowed: false, reason: 'module_not_enabled', permission };
     if (!grants.some((g) => g.permission === permission)) return { allowed: false, reason: 'permission_denied', permission };
   }
@@ -68,6 +91,12 @@ export class AuthorizationService {
         .filter(isPermissionKey)
         .map((permission) => ({ permission, scopeType: a.scopeType, scopeId: a.scopeId, mfaRequired: a.role.mfaRequired })),
     );
+  }
+
+  /** Statut de l'abonnement du tenant courant (fonction SECURITY DEFINER) ; `undefined` si le tenant n'a pas d'abonnement. */
+  async loadSubscriptionStatus(tx: TenantTx): Promise<SubscriptionStatus | undefined> {
+    const rows = await tx.$queryRaw<{ status: SubscriptionStatus }[]>`SELECT status FROM platform.current_tenant_subscription()`;
+    return rows[0]?.status;
   }
 
   /** Modules actifs et statut du tenant courant (fonction SECURITY DEFINER, tenant lu dans le contexte). */

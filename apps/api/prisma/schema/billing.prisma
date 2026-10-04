@@ -1,0 +1,248 @@
+// Facturation patient, caisse et paiements (docs/09 §C). Aucune relation vers les modèles de core.prisma :
+// les clés étrangères vers `tenant.patients`, `tenant.sites`… sont créées en SQL (migration 20261005000200).
+
+// ───────────── Schéma platform : paiements (rôle ghmt_platform uniquement) ─────────────
+model PaymentAttempt {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  purpose           String // saas_invoice | patient_invoice
+  tenantId          String    @map("tenant_id") @db.Uuid
+  referenceId       String    @map("reference_id") @db.Uuid
+  amount            Decimal   @db.Decimal(18, 2)
+  currency          String    @db.Char(3)
+  channel           String // mobile_money | card
+  provider          String
+  providerReference String?   @map("provider_reference")
+  status            String    @default("pending") // pending | succeeded | failed | cancelled
+  idempotencyKey    String    @unique @map("idempotency_key")
+  /// HMAC du numéro payeur : jamais le numéro en clair.
+  payerPhoneHash    String?   @map("payer_phone_hash")
+  description       String
+  checkoutUrl       String?   @map("checkout_url")
+  instructions      String?
+  failureReason     String?   @map("failure_reason")
+  checkCount        Int       @default(0) @map("check_count")
+  lastCheckedAt     DateTime? @map("last_checked_at") @db.Timestamptz(6)
+  settledAt         DateTime? @map("settled_at") @db.Timestamptz(6)
+  /// Renseigné quand l'événement `payment.succeeded|failed` a été traité par les abonnés (sinon republié par le job).
+  notifiedAt        DateTime? @map("notified_at") @db.Timestamptz(6)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([provider, providerReference])
+  @@index([status, createdAt])
+  @@index([tenantId, purpose, referenceId])
+  @@map("payment_attempts")
+  @@schema("platform")
+}
+
+model PaymentEvent {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  provider          String
+  providerEventId   String    @map("provider_event_id")
+  providerReference String?   @map("provider_reference")
+  attemptId         String?   @map("attempt_id") @db.Uuid
+  /// Corps brut du webhook, conservé pour l'audit et le rejeu (rétention 1 an).
+  rawBody           String    @map("raw_body")
+  receivedAt        DateTime  @default(now()) @map("received_at") @db.Timestamptz(6)
+  processedAt       DateTime? @map("processed_at") @db.Timestamptz(6)
+  outcome           String?
+
+  @@unique([provider, providerEventId])
+  @@index([attemptId])
+  @@map("payment_events")
+  @@schema("platform")
+}
+
+/// « Côté fournisseur » du simulateur sandbox : transactions créées par le checkout simulé.
+model SandboxTransaction {
+  providerReference String   @id @map("provider_reference")
+  amount            Decimal  @db.Decimal(18, 2)
+  currency          String   @db.Char(3)
+  status            String   @default("pending") // pending | succeeded | failed
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("sandbox_transactions")
+  @@schema("platform")
+}
+
+// ───────────── Schéma tenant : grille tarifaire ─────────────
+model PriceList {
+  id        String   @default(uuid(7)) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  code      String
+  name      String
+  currency  String   @db.Char(3)
+  isDefault Boolean  @default(false) @map("is_default")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdBy String?  @map("created_by") @db.Uuid
+  updatedBy String?  @map("updated_by") @db.Uuid
+
+  items PriceListItem[]
+
+  @@id([tenantId, id])
+  @@unique([tenantId, code])
+  @@map("price_lists")
+  @@schema("tenant")
+}
+
+model PriceListItem {
+  id          String   @default(uuid(7)) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  priceListId String   @map("price_list_id") @db.Uuid
+  code        String
+  label       String
+  category    String // consultation | acte | examen | medicament | autre
+  unitPrice   Decimal  @map("unit_price") @db.Decimal(18, 2)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  priceList PriceList @relation(fields: [tenantId, priceListId], references: [tenantId, id])
+
+  @@id([tenantId, id])
+  @@unique([tenantId, priceListId, code])
+  @@index([tenantId, priceListId, category])
+  @@map("price_list_items")
+  @@schema("tenant")
+}
+
+// ───────────── Schéma tenant : factures patient ─────────────
+model PatientInvoice {
+  id            String    @default(uuid(7)) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  /// Attribué à l'émission (tenant.next_sequence), jamais réutilisé.
+  number        String?
+  status        String    @default("draft") // draft | issued | partially_paid | paid | void
+  patientId     String    @map("patient_id") @db.Uuid // FK composite en SQL
+  siteId        String    @map("site_id") @db.Uuid // FK composite en SQL
+  appointmentId String?   @map("appointment_id") @db.Uuid // FK composite optionnelle en SQL
+  currency      String    @db.Char(3)
+  subtotal      Decimal   @default(0) @db.Decimal(18, 2)
+  total         Decimal   @default(0) @db.Decimal(18, 2)
+  amountPaid    Decimal   @default(0) @map("amount_paid") @db.Decimal(18, 2)
+  notes         String?
+  issuedAt      DateTime? @map("issued_at") @db.Timestamptz(6)
+  issuedBy      String?   @map("issued_by") @db.Uuid
+  voidedAt      DateTime? @map("voided_at") @db.Timestamptz(6)
+  voidedBy      String?   @map("voided_by") @db.Uuid
+  voidReason    String?   @map("void_reason")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdBy     String?   @map("created_by") @db.Uuid
+  updatedBy     String?   @map("updated_by") @db.Uuid
+  rowVersion    Int       @default(1) @map("row_version")
+
+  lines    PatientInvoiceLine[]
+  payments PatientPayment[]
+
+  @@id([tenantId, id])
+  @@unique([tenantId, number])
+  @@index([tenantId, patientId, createdAt(sort: Desc)])
+  @@index([tenantId, siteId, status])
+  @@map("invoices")
+  @@schema("tenant")
+}
+
+model PatientInvoiceLine {
+  id              String  @default(uuid(7)) @db.Uuid
+  tenantId        String  @map("tenant_id") @db.Uuid
+  invoiceId       String  @map("invoice_id") @db.Uuid
+  lineNo          Int     @map("line_no")
+  priceListItemId String? @map("price_list_item_id") @db.Uuid // FK composite optionnelle en SQL
+  category        String
+  description     String
+  quantity        Decimal @db.Decimal(18, 3)
+  unitPrice       Decimal @map("unit_price") @db.Decimal(18, 2)
+  lineTotal       Decimal @map("line_total") @db.Decimal(18, 2)
+
+  invoice PatientInvoice @relation(fields: [tenantId, invoiceId], references: [tenantId, id])
+
+  @@id([tenantId, id])
+  @@unique([tenantId, invoiceId, lineNo])
+  @@map("invoice_lines")
+  @@schema("tenant")
+}
+
+// ───────────── Schéma tenant : encaissements ─────────────
+model PatientPayment {
+  id                String    @default(uuid(7)) @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  invoiceId         String    @map("invoice_id") @db.Uuid
+  patientId         String    @map("patient_id") @db.Uuid
+  method            String // cash | mobile_money | card | other
+  amount            Decimal   @db.Decimal(18, 2)
+  currency          String    @db.Char(3)
+  status            String // pending | succeeded | failed
+  paidAt            DateTime? @map("paid_at") @db.Timestamptz(6)
+  cashSessionId     String?   @map("cash_session_id") @db.Uuid // FK composite optionnelle en SQL
+  receivedBy        String?   @map("received_by") @db.Uuid
+  /// Tentative plateforme (platform.payment_attempts.id) pour Mobile Money / carte, sans clé étrangère inter-schémas.
+  attemptId         String?   @map("attempt_id") @db.Uuid
+  provider          String?
+  providerReference String?   @map("provider_reference")
+  checkoutUrl       String?   @map("checkout_url")
+  reference         String?
+  failureReason     String?   @map("failure_reason")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  invoice PatientInvoice @relation(fields: [tenantId, invoiceId], references: [tenantId, id])
+
+  @@id([tenantId, id])
+  @@unique([tenantId, attemptId])
+  @@index([tenantId, invoiceId])
+  @@index([tenantId, cashSessionId])
+  @@map("payments")
+  @@schema("tenant")
+}
+
+// ───────────── Schéma tenant : caisse ─────────────
+model CashRegister {
+  id        String   @default(uuid(7)) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  siteId    String   @map("site_id") @db.Uuid // FK composite en SQL
+  code      String
+  name      String
+  currency  String   @db.Char(3)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdBy String?  @map("created_by") @db.Uuid
+
+  sessions CashSession[]
+
+  @@id([tenantId, id])
+  @@unique([tenantId, siteId, code])
+  @@map("cash_registers")
+  @@schema("tenant")
+}
+
+model CashSession {
+  id             String    @default(uuid(7)) @db.Uuid
+  tenantId       String    @map("tenant_id") @db.Uuid
+  cashRegisterId String    @map("cash_register_id") @db.Uuid
+  status         String    @default("open") // open | closed | validated
+  currency       String    @db.Char(3)
+  openedBy       String    @map("opened_by") @db.Uuid
+  openedAt       DateTime  @default(now()) @map("opened_at") @db.Timestamptz(6)
+  openingFloat   Decimal   @map("opening_float") @db.Decimal(18, 2)
+  closedBy       String?   @map("closed_by") @db.Uuid
+  closedAt       DateTime? @map("closed_at") @db.Timestamptz(6)
+  expectedTotal  Decimal?  @map("expected_total") @db.Decimal(18, 2)
+  closingCounted Decimal?  @map("closing_counted") @db.Decimal(18, 2)
+  variance       Decimal?  @db.Decimal(18, 2)
+  closingNote    String?   @map("closing_note")
+  validatedBy    String?   @map("validated_by") @db.Uuid
+  validatedAt    DateTime? @map("validated_at") @db.Timestamptz(6)
+  validationNote String?   @map("validation_note")
+
+  register CashRegister @relation(fields: [tenantId, cashRegisterId], references: [tenantId, id])
+
+  @@id([tenantId, id])
+  @@index([tenantId, cashRegisterId, openedAt(sort: Desc)])
+  @@index([tenantId, openedBy, status])
+  @@map("cash_sessions")
+  @@schema("tenant")
+}

@@ -8,6 +8,7 @@ import { buttonClass } from '@/components/ui/styles';
 import { isApiError } from '@/lib/api/errors';
 import { describeApiError } from '@/lib/api/messages';
 import { canUse } from '@/lib/auth/me';
+import { newInvoiceHref } from '@/lib/domain/billing-links';
 import { toPatient } from '@/lib/domain/mappers';
 import { deceasedBanner, patientSheetRows } from '@/lib/domain/patient-sheet';
 import { pageApi } from '@/server/api';
@@ -35,6 +36,7 @@ export default async function PatientPage({ params }: { readonly params: Promise
 
   const patient = toPatient(patientRaw);
   const canBook = canUse(me, 'appointments', 'appointments:appointment:create');
+  const canBill = canUse(me, 'billing', 'billing:invoice:create');
   const rows = patientSheetRows(patient);
   const banner = deceasedBanner(patient);
 
@@ -43,8 +45,13 @@ export default async function PatientPage({ params }: { readonly params: Promise
       <PageHeader
         title={patient.fullName}
         actions={
-          canBook && !banner ? (
-            <Link href={`/rendez-vous?patientId=${encodeURIComponent(patient.id)}${patient.recordNumber ? `&ipp=${encodeURIComponent(patient.recordNumber)}` : ''}&nouveau=1`} className={buttonClass.primary}>Prendre un rendez-vous</Link>
+          canBook || canBill ? (
+            <div className="flex flex-wrap gap-2">
+              {canBill ? <Link href={newInvoiceHref({ patientId: patient.id })} className={buttonClass.secondary}>Facturer</Link> : null}
+              {canBook && !banner ? (
+                <Link href={`/rendez-vous?patientId=${encodeURIComponent(patient.id)}${patient.recordNumber ? `&ipp=${encodeURIComponent(patient.recordNumber)}` : ''}&nouveau=1`} className={buttonClass.primary}>Prendre un rendez-vous</Link>
+              ) : null}
+            </div>
           ) : undefined
         }
       />

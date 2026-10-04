@@ -12,6 +12,7 @@ import { describeApiError } from '@/lib/api/messages';
 import { canUse } from '@/lib/auth/me';
 import { agendaHref } from '@/lib/domain/agenda-links';
 import { allowedStatusActions } from '@/lib/domain/appointments';
+import { newInvoiceHref } from '@/lib/domain/billing-links';
 import { loadBookingPatient, type BookingPatient } from '@/lib/domain/booking-patient';
 import { groupByPractitioner, toAppointment, toList, toPractitioner, toSite } from '@/lib/domain/mappers';
 import { addDays, dayRange, formatLongDay, formatTime, isDayString, todayInZone } from '@/lib/format/dates';
@@ -42,6 +43,7 @@ export default async function AppointmentsPage({ searchParams }: { readonly sear
   const practitionerId = search.practitionerId && UUID_PATTERN.test(search.practitionerId) ? search.practitionerId : undefined;
   const canCreate = canUse(me, 'appointments', 'appointments:appointment:create');
   const canUpdate = canUse(me, 'appointments', 'appointments:appointment:update');
+  const canBill = canUse(me, 'billing', 'billing:invoice:create');
   const canListPractitioners = canUse(me, 'appointments', 'appointments:agenda:read');
   const showCreate = canCreate && search.nouveau === '1';
   const { from, to } = dayRange(day, tz);
@@ -133,7 +135,14 @@ export default async function AppointmentsPage({ searchParams }: { readonly sear
                   <StatusBadge status={a.status} />
                 </div>
                 {a.reason ? <p className="mt-1 text-sm text-slate-700">{a.reason}</p> : null}
-                {canUpdate ? <div className="mt-2"><StatusActions appointmentId={a.id} actions={allowedStatusActions(a.status)} /></div> : null}
+                {canUpdate || (canBill && a.patientId && a.status !== 'cancelled') ? (
+                  <div className="mt-2 flex flex-wrap items-start gap-2">
+                    {canUpdate ? <StatusActions appointmentId={a.id} actions={allowedStatusActions(a.status)} /> : null}
+                    {canBill && a.patientId && a.status !== 'cancelled' ? (
+                      <Link href={newInvoiceHref({ patientId: a.patientId, appointmentId: a.id })} className={buttonClass.secondary} aria-label={`Facturer le rendez-vous de ${a.patientName}`}>Facturer</Link>
+                    ) : null}
+                  </div>
+                ) : null}
               </li>
             ))}
           </ul>

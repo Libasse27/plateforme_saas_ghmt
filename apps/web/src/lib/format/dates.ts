@@ -94,3 +94,24 @@ export function formatBirthDate(value: string | undefined): string {
   const [y, m, d] = value.slice(0, 10).split('-');
   return `${d}/${m}/${y}`;
 }
+
+/** Jour civil du fuseau au format JJ/MM/AAAA ; « - » si la date est absente ou invalide. */
+export function formatDay(iso: string | null | undefined, timeZone: string): string {
+  const date = iso ? new Date(iso) : null;
+  if (!date || Number.isNaN(date.getTime())) return '-';
+  return new Intl.DateTimeFormat('fr-FR', { timeZone, day: '2-digit', month: '2-digit', year: 'numeric' }).format(date);
+}
+
+/** Date et heure du fuseau : « 03/11/2026 14:05 ». */
+export function formatDateTime(iso: string | null | undefined, timeZone: string): string {
+  const date = iso ? new Date(iso) : null;
+  if (!date || Number.isNaN(date.getTime())) return '-';
+  return `${formatDay(iso, timeZone)} ${formatTime(iso as string, timeZone)}`;
+}
+
+/** Nombre de jours restants jusqu'à l'échéance (arrondi au supérieur, jamais négatif) ; null si la date est invalide. */
+export function daysUntil(iso: string | null | undefined, now: Date): number | null {
+  const target = iso ? new Date(iso).getTime() : Number.NaN;
+  if (Number.isNaN(target)) return null;
+  return Math.max(0, Math.ceil((target - now.getTime()) / DAY_MS));
+}

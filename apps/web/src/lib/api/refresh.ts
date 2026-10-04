@@ -7,7 +7,12 @@ export interface RefreshDeps {
   readonly baseUrl: string;
   readonly fetchImpl?: typeof fetch;
   readonly clientInfo?: ClientInfo | undefined;
+  /** Chemin du rafraîchissement : `/auth/refresh` (établissement) ou `/platform/auth/refresh` (plateforme). */
+  readonly refreshPath?: string | undefined;
 }
+
+export const TENANT_REFRESH_PATH = '/auth/refresh';
+export const PLATFORM_REFRESH_PATH = '/platform/auth/refresh';
 
 /**
  * Le refresh token est rotatif avec détection de réutilisation (docs/04) : deux rafraîchissements
@@ -48,7 +53,7 @@ async function callRefresh(deps: RefreshDeps, refreshToken: string): Promise<Tok
   const fetchImpl = deps.fetchImpl ?? fetch;
   let response: Response;
   try {
-    response = await fetchImpl(`${deps.baseUrl.replace(/\/+$/, '')}/auth/refresh`, {
+    response = await fetchImpl(`${deps.baseUrl.replace(/\/+$/, '')}${deps.refreshPath ?? TENANT_REFRESH_PATH}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json', ...forwardHeaders(deps.clientInfo) },
       body: JSON.stringify({ refreshToken }),

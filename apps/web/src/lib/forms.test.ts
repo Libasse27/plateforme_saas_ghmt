@@ -99,3 +99,17 @@ describe('publicValues : mots de passe de C6/C7', () => {
     expect(publicValues({ currentPassword: 'a', newPassword: 'b', confirmPassword: 'c', email: 'x@y.sn' })).toEqual({ email: 'x@y.sn' });
   });
 });
+
+describe('safePlatformPath', () => {
+  it('accepte les chemins de la console plateforme', async () => {
+    const { safePlatformPath } = await import('./forms');
+    expect(safePlatformPath('/plateforme/factures?status=open')).toBe('/plateforme/factures?status=open');
+    expect(safePlatformPath('/plateforme')).toBe('/plateforme');
+  });
+  it('refuse les chemins établissement, externes et ambigus', async () => {
+    const { safePlatformPath } = await import('./forms');
+    for (const bad of ['/patients', '//evil.test', 'https://evil.test', '/plateformefake', '/plateforme\\x', undefined, null, '']) {
+      expect(safePlatformPath(bad)).toBe('/plateforme');
+    }
+  });
+});

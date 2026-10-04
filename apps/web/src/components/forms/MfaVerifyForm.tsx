@@ -2,13 +2,19 @@
 
 import { useActionState } from 'react';
 import { mfaVerifyAction } from '@/actions/auth';
-import { EMPTY_FORM_STATE } from '@/lib/forms';
+import { EMPTY_FORM_STATE, type FormState } from '@/lib/forms';
 import { FormMessage } from '@/components/ui/FormMessage';
 import { TextField } from '@/components/ui/Field';
 import { SubmitButton } from '@/components/ui/SubmitButton';
 
-export function MfaVerifyForm({ next }: { readonly next: string }) {
-  const [state, formAction] = useActionState(mfaVerifyAction, EMPTY_FORM_STATE);
+export interface MfaVerifyFormProps {
+  readonly next: string;
+  /** Action du realm (défaut : établissement ; la console plateforme fournit la sienne). */
+  readonly action?: (prev: FormState, formData: FormData) => Promise<FormState>;
+}
+
+export function MfaVerifyForm({ next, action = mfaVerifyAction }: MfaVerifyFormProps) {
+  const [state, formAction] = useActionState(action, EMPTY_FORM_STATE);
   return (
     <form action={formAction} className="space-y-4" noValidate>
       <FormMessage state={state} />

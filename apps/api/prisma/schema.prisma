@@ -1,0 +1,568 @@
+// Schéma Prisma du MVP GHMT — voir docs/02-modele-donnees.md §7.
+// RLS, fonctions SQL, contraintes EXCLUDE et index spécifiques : migrations SQL (prisma/migrations).
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+  importFileExtension = ""
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["platform", "tenant"]
+}
+
+// ───────────── Enums ─────────────
+enum EstablishmentType {
+  hospital_n1
+  hospital_n2
+  hospital_n3
+  medicalized_center
+  health_center
+  clinic
+  private_practice
+  laboratory
+  pharmacy
+  diagnostic_center
+  specialized_center
+  other
+
+  @@map("establishment_type")
+  @@schema("platform")
+}
+
+enum TenantStatus {
+  pending
+  active
+  suspended
+  terminated
+
+  @@map("tenant_status")
+  @@schema("platform")
+}
+
+enum ScopeType {
+  tenant
+  site
+  department
+
+  @@map("scope_type")
+  @@schema("tenant")
+}
+
+enum UserStatus {
+  invited
+  active
+  locked
+  disabled
+
+  @@map("user_status")
+  @@schema("tenant")
+}
+
+enum Sex {
+  male
+  female
+  other
+  unknown
+
+  @@map("sex")
+  @@schema("tenant")
+}
+
+enum AppointmentStatus {
+  requested
+  scheduled
+  confirmed
+  checked_in
+  in_progress
+  completed
+  cancelled
+  no_show
+
+  @@map("appointment_status")
+  @@schema("tenant")
+}
+
+// ───────────── Schéma platform ─────────────
+model Tenant {
+  id                String            @id @default(uuid(7)) @db.Uuid
+  groupId           String?           @map("group_id") @db.Uuid
+  slug              String            @unique
+  legalName         String            @map("legal_name")
+  tradeName         String?           @map("trade_name")
+  establishmentType EstablishmentType @map("establishment_type")
+  status            TenantStatus      @default(pending)
+  countryCode       String            @map("country_code") @db.Char(2)
+  baseCurrency      String            @map("base_currency") @db.Char(3)
+  timezone          String            @default("Africa/Dakar")
+  defaultLocale     String            @default("fr") @map("default_locale")
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt         DateTime?         @map("deleted_at") @db.Timestamptz(6)
+
+  modules  TenantModule[]
+  sites    Site[]
+  users    User[]
+  patients Patient[]
+
+  @@index([groupId])
+  @@index([status])
+  @@map("tenants")
+  @@schema("platform")
+}
+
+model Module {
+  code        String  @id
+  name        String
+  isCore      Boolean @default(false) @map("is_core")
+  description String?
+
+  tenants     TenantModule[]
+  permissions Permission[]
+
+  @@map("modules")
+  @@schema("platform")
+}
+
+model TenantModule {
+  tenantId   String    @map("tenant_id") @db.Uuid
+  moduleCode String    @map("module_code")
+  enabledAt  DateTime  @default(now()) @map("enabled_at") @db.Timestamptz(6)
+  disabledAt DateTime? @map("disabled_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  module Module @relation(fields: [moduleCode], references: [code])
+
+  @@id([tenantId, moduleCode])
+  @@map("tenant_modules")
+  @@schema("platform")
+}
+
+model Permission {
+  code        String  @id
+  moduleCode  String  @map("module_code")
+  resource    String
+  action      String
+  isSensitive Boolean @default(false) @map("is_sensitive")
+
+  module          Module           @relation(fields: [moduleCode], references: [code])
+  rolePermissions RolePermission[]
+
+  @@index([moduleCode])
+  @@map("permissions")
+  @@schema("platform")
+}
+
+// ───────────── Schéma tenant : organisation ─────────────
+model Site {
+  id          String    @default(uuid(7)) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  code        String
+  name        String
+  city        String?
+  countryCode String?   @map("country_code") @db.Char(2)
+  isMain      Boolean   @default(false) @map("is_main")
+  timezone    String?
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdBy   String?   @map("created_by") @db.Uuid
+  updatedBy   String?   @map("updated_by") @db.Uuid
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+  rowVersion  Int       @default(1) @map("row_version")
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+  departments  Department[]
+  appointments Appointment[]
+
+  @@id([tenantId, id])
+  @@unique([tenantId, code])
+  @@map("sites")
+  @@schema("tenant")
+}
+
+model Department {
+  id         String    @default(uuid(7)) @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  siteId     String    @map("site_id") @db.Uuid
+  parentId   String?   @map("parent_id") @db.Uuid // FK composite optionnelle créée en SQL
+  code       String
+  name       String
+  kind       String    @default("clinical")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdBy  String?   @map("created_by") @db.Uuid
+  updatedBy  String?   @map("updated_by") @db.Uuid
+  deletedAt  DateTime? @map("deleted_at") @db.Timestamptz(6)
+  rowVersion Int       @default(1) @map("row_version")
+
+  site Site @relation(fields: [tenantId, siteId], references: [tenantId, id])
+
+  @@id([tenantId, id])
+  @@unique([tenantId, siteId, code])
+  @@index([tenantId, siteId])
+  @@map("departments")
+  @@schema("tenant")
+}
+
+// ───────────── Identité & RBAC ─────────────
+model User {
+  id              String     @default(uuid(7)) @db.Uuid
+  tenantId        String     @map("tenant_id") @db.Uuid
+  email           String     @db.Citext
+  emailVerifiedAt DateTime?  @map("email_verified_at") @db.Timestamptz(6)
+  fullName        String     @map("full_name")
+  status          UserStatus @default(invited)
+  locale          String     @default("fr")
+  lastLoginAt     DateTime?  @map("last_login_at") @db.Timestamptz(6)
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdBy       String?    @map("created_by") @db.Uuid
+  updatedBy       String?    @map("updated_by") @db.Uuid
+  deletedAt       DateTime?  @map("deleted_at") @db.Timestamptz(6)
+  rowVersion      Int        @default(1) @map("row_version")
+
+  tenant      Tenant               @relation(fields: [tenantId], references: [id])
+  credential  UserCredential?
+  mfaFactors  MfaFactor[]
+  sessions    Session[]
+  assignments UserRoleAssignment[]
+  invitations Invitation[]
+
+  @@id([tenantId, id])
+  @@unique([tenantId, email])
+  @@map("users")
+  @@schema("tenant")
+}
+
+model UserCredential {
+  tenantId           String    @map("tenant_id") @db.Uuid
+  userId             String    @map("user_id") @db.Uuid
+  passwordHash       String    @map("password_hash")
+  passwordChangedAt  DateTime  @default(now()) @map("password_changed_at") @db.Timestamptz(6)
+  failedAttempts     Int       @default(0) @map("failed_attempts")
+  lockedUntil        DateTime? @map("locked_until") @db.Timestamptz(6)
+  mustChangePassword Boolean   @default(false) @map("must_change_password")
+
+  user User @relation(fields: [tenantId, userId], references: [tenantId, id], onDelete: Cascade)
+
+  @@id([tenantId, userId])
+  @@map("user_credentials")
+  @@schema("tenant")
+}
+
+/// Facteur MFA TOTP : secret chiffré (AES-256-GCM), dernier pas accepté (anti-rejeu), codes de secours hachés.
+model MfaFactor {
+  id               String    @default(uuid(7)) @db.Uuid
+  tenantId         String    @map("tenant_id") @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  kind             String    @default("totp")
+  secretEnc        Bytes     @map("secret_enc")
+  lastUsedStep     BigInt?   @map("last_used_step")
+  backupCodeHashes String[]  @map("backup_code_hashes")
+  activatedAt      DateTime? @map("activated_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [tenantId, userId], references: [tenantId, id], onDelete: Cascade)
+
+  @@id([tenantId, id])
+  @@unique([tenantId, userId, kind])
+  @@map("mfa_factors")
+  @@schema("tenant")
+}
+
+/// Challenge MFA émis après un mot de passe valide (TTL 5 min, usage unique, 5 essais).
+model MfaChallenge {
+  id          String    @default(uuid(7)) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  tokenHash   Bytes     @map("token_hash")
+  attempts    Int       @default(0)
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  consumedAt  DateTime? @map("consumed_at") @db.Timestamptz(6)
+  deviceLabel String?   @map("device_label")
+  userAgent   String?   @map("user_agent")
+  ip          String?   @db.Inet
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([tenantId, id])
+  @@unique([tenantId, tokenHash])
+  @@map("mfa_challenges")
+  @@schema("tenant")
+}
+
+/// Invitation d'un utilisateur : jeton à usage unique (256 bits), seule l'empreinte SHA-256 est stockée.
+model Invitation {
+  id         String    @default(uuid(7)) @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tokenHash  Bytes     @map("token_hash")
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(6)
+  createdBy  String?   @map("created_by") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [tenantId, userId], references: [tenantId, id], onDelete: Cascade)
+
+  @@id([tenantId, id])
+  @@unique([tenantId, tokenHash])
+  @@index([tenantId, userId])
+  @@map("invitations")
+  @@schema("tenant")
+}
+
+model Role {
+  id           String    @default(uuid(7)) @db.Uuid
+  tenantId     String    @map("tenant_id") @db.Uuid
+  code         String
+  name         String
+  description  String?
+  isSystem     Boolean   @default(false) @map("is_system")
+  templateCode String?   @map("template_code")
+  mfaRequired  Boolean   @default(false) @map("mfa_required")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdBy    String?   @map("created_by") @db.Uuid
+  updatedBy    String?   @map("updated_by") @db.Uuid
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  permissions RolePermission[]
+  assignments UserRoleAssignment[]
+
+  @@id([tenantId, id])
+  @@unique([tenantId, code])
+  @@map("roles")
+  @@schema("tenant")
+}
+
+model RolePermission {
+  tenantId       String @map("tenant_id") @db.Uuid
+  roleId         String @map("role_id") @db.Uuid
+  permissionCode String @map("permission_code")
+
+  role       Role       @relation(fields: [tenantId, roleId], references: [tenantId, id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionCode], references: [code])
+
+  @@id([tenantId, roleId, permissionCode])
+  @@index([tenantId, permissionCode])
+  @@map("role_permissions")
+  @@schema("tenant")
+}
+
+model UserRoleAssignment {
+  id         String    @default(uuid(7)) @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  roleId     String    @map("role_id") @db.Uuid
+  scopeType  ScopeType @map("scope_type")
+  scopeId    String?   @map("scope_id") @db.Uuid // NULL si scope_type = tenant (contrainte CHECK en SQL)
+  validFrom  DateTime  @default(now()) @map("valid_from") @db.Timestamptz(6)
+  validUntil DateTime? @map("valid_until") @db.Timestamptz(6)
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdBy  String?   @map("created_by") @db.Uuid
+
+  user User @relation(fields: [tenantId, userId], references: [tenantId, id])
+  role Role @relation(fields: [tenantId, roleId], references: [tenantId, id])
+
+  @@id([tenantId, id])
+  @@index([tenantId, userId])
+  @@index([tenantId, roleId])
+  @@index([tenantId, scopeType, scopeId])
+  @@map("user_role_assignments")
+  @@schema("tenant")
+}
+
+model Session {
+  id            String    @default(uuid(7)) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  deviceLabel   String?   @map("device_label")
+  userAgent     String?   @map("user_agent")
+  ip            String?   @db.Inet
+  mfaVerifiedAt DateTime? @map("mfa_verified_at") @db.Timestamptz(6)
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(6)
+  revokedReason String?   @map("revoked_reason")
+  lastSeenAt    DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user          User           @relation(fields: [tenantId, userId], references: [tenantId, id])
+  refreshTokens RefreshToken[]
+
+  @@id([tenantId, id])
+  @@index([tenantId, userId])
+  @@index([tenantId, expiresAt])
+  @@map("sessions")
+  @@schema("tenant")
+}
+
+model RefreshToken {
+  id           String    @default(uuid(7)) @db.Uuid
+  tenantId     String    @map("tenant_id") @db.Uuid
+  sessionId    String    @map("session_id") @db.Uuid
+  tokenHash    Bytes     @map("token_hash")
+  familyId     String    @map("family_id") @db.Uuid
+  issuedAt     DateTime  @default(now()) @map("issued_at") @db.Timestamptz(6)
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt       DateTime? @map("used_at") @db.Timestamptz(6)
+  replacedById String?   @map("replaced_by_id") @db.Uuid
+
+  session Session @relation(fields: [tenantId, sessionId], references: [tenantId, id], onDelete: Cascade)
+
+  @@id([tenantId, id])
+  @@unique([tenantId, tokenHash])
+  @@index([tenantId, sessionId])
+  @@index([tenantId, familyId])
+  @@map("refresh_tokens")
+  @@schema("tenant")
+}
+
+// ───────────── Audit (append-only, chaîne de hachage par tenant) ─────────────
+// Partitionnement mensuel prévu (docs/02 §5.2) ; table simple au MVP.
+model AuditLog {
+  id               String   @default(uuid(7)) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  occurredAt       DateTime @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  chainSeq         BigInt   @map("chain_seq")
+  actorType        String   @map("actor_type")
+  actorUserId      String?  @map("actor_user_id") @db.Uuid
+  delegatedGrantId String?  @map("delegated_grant_id") @db.Uuid
+  sessionId        String?  @map("session_id") @db.Uuid
+  ip               String?  @db.Inet
+  action           String
+  resourceType     String?  @map("resource_type")
+  resourceId       String?  @map("resource_id") @db.Uuid
+  patientId        String?  @map("patient_id") @db.Uuid
+  outcome          String   @default("success")
+  changes          Json?
+  requestId        String?  @map("request_id")
+  prevHash         Bytes    @map("prev_hash")
+  hash             Bytes
+
+  @@id([tenantId, id])
+  @@unique([tenantId, chainSeq])
+  @@index([tenantId, occurredAt(sort: Desc)])
+  @@index([tenantId, resourceType, resourceId, occurredAt(sort: Desc)])
+  @@index([tenantId, actorUserId, occurredAt(sort: Desc)])
+  @@index([tenantId, patientId, occurredAt(sort: Desc)])
+  @@map("audit_logs")
+  @@schema("tenant")
+}
+
+model SequenceCounter {
+  tenantId  String   @map("tenant_id") @db.Uuid
+  scopeKey  String   @map("scope_key")
+  periodKey String   @default("") @map("period_key")
+  lastValue BigInt   @default(0) @map("last_value")
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@id([tenantId, scopeKey, periodKey])
+  @@map("sequence_counters")
+  @@schema("tenant")
+}
+
+// ───────────── Patients ─────────────
+model Patient {
+  id                  String    @default(uuid(7)) @db.Uuid
+  tenantId            String    @map("tenant_id") @db.Uuid
+  ipp                 String
+  lastName            String    @map("last_name")
+  firstName           String    @map("first_name")
+  searchName          String    @map("search_name")
+  birthDate           DateTime? @map("birth_date") @db.Date
+  birthDateEstimated  Boolean   @default(false) @map("birth_date_estimated")
+  sex                 Sex       @default(unknown)
+  bloodGroup          String?   @map("blood_group")
+  nationalIdEnc       Bytes?    @map("national_id_enc")
+  nationalIdBidx      Bytes?    @map("national_id_bidx")
+  phoneEnc            Bytes?    @map("phone_enc")
+  phoneBidx           Bytes?    @map("phone_bidx")
+  emailEnc            Bytes?    @map("email_enc")
+  emailBidx           Bytes?    @map("email_bidx")
+  addressEnc          Bytes?    @map("address_enc")
+  city                String?
+  primarySiteId       String?   @map("primary_site_id") @db.Uuid // FK composite créée en SQL
+  keyVersion          Int       @default(1) @map("key_version") @db.SmallInt
+  deceasedAt          DateTime? @map("deceased_at") @db.Timestamptz(6)
+  mergedIntoPatientId String?   @map("merged_into_patient_id") @db.Uuid
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdBy           String?   @map("created_by") @db.Uuid
+  updatedBy           String?   @map("updated_by") @db.Uuid
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamptz(6)
+  rowVersion          Int       @default(1) @map("row_version")
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+  appointments Appointment[]
+
+  @@id([tenantId, id])
+  @@unique([tenantId, ipp])
+  @@index([tenantId, birthDate])
+  @@index([tenantId, phoneBidx])
+  @@index([tenantId, nationalIdBidx])
+  @@map("patients")
+  @@schema("tenant")
+}
+
+// ───────────── Rendez-vous ─────────────
+model Practitioner {
+  id                    String    @default(uuid(7)) @db.Uuid
+  tenantId              String    @map("tenant_id") @db.Uuid
+  userId                String?   @map("user_id") @db.Uuid // FK composite optionnelle en SQL
+  fullName              String    @map("full_name")
+  specialty             String?
+  departmentId          String?   @map("department_id") @db.Uuid // FK composite optionnelle en SQL
+  primarySiteId         String?   @map("primary_site_id") @db.Uuid
+  licenseNumber         String?   @map("license_number")
+  defaultConsultMinutes Int       @default(20) @map("default_consult_minutes")
+  isBookable            Boolean   @default(true) @map("is_bookable")
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdBy             String?   @map("created_by") @db.Uuid
+  updatedBy             String?   @map("updated_by") @db.Uuid
+  deletedAt             DateTime? @map("deleted_at") @db.Timestamptz(6)
+  rowVersion            Int       @default(1) @map("row_version")
+
+  appointments Appointment[]
+
+  @@id([tenantId, id])
+  @@unique([tenantId, userId])
+  @@index([tenantId, departmentId])
+  @@map("practitioners")
+  @@schema("tenant")
+}
+
+model Appointment {
+  id             String            @default(uuid(7)) @db.Uuid
+  tenantId       String            @map("tenant_id") @db.Uuid
+  patientId      String            @map("patient_id") @db.Uuid
+  practitionerId String            @map("practitioner_id") @db.Uuid
+  siteId         String            @map("site_id") @db.Uuid
+  startsAt       DateTime          @map("starts_at") @db.Timestamptz(6)
+  endsAt         DateTime          @map("ends_at") @db.Timestamptz(6)
+  // time_range tstzrange : colonne générée en SQL pour la contrainte EXCLUDE anti-chevauchement
+  status         AppointmentStatus @default(scheduled)
+  source         String            @default("front_desk")
+  reason         String?
+  cancelReason   String?           @map("cancel_reason")
+  checkedInAt    DateTime?         @map("checked_in_at") @db.Timestamptz(6)
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdBy      String?           @map("created_by") @db.Uuid
+  updatedBy      String?           @map("updated_by") @db.Uuid
+  deletedAt      DateTime?         @map("deleted_at") @db.Timestamptz(6)
+  rowVersion     Int               @default(1) @map("row_version")
+
+  patient      Patient      @relation(fields: [tenantId, patientId], references: [tenantId, id])
+  practitioner Practitioner @relation(fields: [tenantId, practitionerId], references: [tenantId, id])
+  site         Site         @relation(fields: [tenantId, siteId], references: [tenantId, id])
+
+  @@id([tenantId, id])
+  @@index([tenantId, patientId, startsAt(sort: Desc)])
+  @@index([tenantId, practitionerId, startsAt])
+  @@index([tenantId, siteId, startsAt])
+  @@map("appointments")
+  @@schema("tenant")
+}

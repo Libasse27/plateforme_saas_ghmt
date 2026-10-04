@@ -209,6 +209,24 @@ describe('payments : simulation sandbox et reprise (refresh)', () => {
     expect((await attemptRow(app, attemptId)).status).toBe('failed');
   });
 
+  it('simule par référence fournisseur (page /sandbox/paiement/<référence> du web)', async () => {
+    const { attemptId } = await gatewayOf(app).initiate(initiateInput(tenant.tenantId));
+    const providerReference = (await attemptRow(app, attemptId)).providerReference as string;
+
+    await http(app).post(`${WEBHOOKS}/sandbox/simulate`).send({ providerReference, outcome: 'success' }).expect(200);
+
+    expect((await attemptRow(app, attemptId)).status).toBe('succeeded');
+  });
+
+  it('exige exactement un identifiant de tentative (422)', async () => {
+    await http(app).post(`${WEBHOOKS}/sandbox/simulate`).send({ outcome: 'success' }).expect(422);
+    await http(app)
+      .post(`${WEBHOOKS}/sandbox/simulate`)
+      .send({ attemptId: randomUUID(), providerReference: 'sbx_reference_inconnue', outcome: 'success' })
+      .expect(422);
+    await http(app).post(`${WEBHOOKS}/sandbox/simulate`).send({ providerReference: 'sbx_reference_inconnue', outcome: 'success' }).expect(404);
+  });
+
   it('refuse une simulation invalide (422) ou sur une tentative inconnue (404)', async () => {
     await http(app).post(`${WEBHOOKS}/sandbox/simulate`).send({ attemptId: 'x', outcome: 'success' }).expect(422);
     await http(app).post(`${WEBHOOKS}/sandbox/simulate`).send({ attemptId: randomUUID(), outcome: 'success' }).expect(404);

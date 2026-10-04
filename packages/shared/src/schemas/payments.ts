@@ -19,10 +19,17 @@ export const positiveMoneyAmount = moneyAmount.refine((value) => /[1-9]/.test(va
 export const currencyCode = z.string().regex(/^[A-Z]{3}$/, 'devise ISO 4217 en majuscules');
 
 /** Simulation d'une issue de paiement par le fournisseur sandbox (développement et tests uniquement). */
-export const sandboxSimulationSchema = z.object({
-  attemptId: uuid,
-  outcome: z.enum(['success', 'failure']),
-});
+export const sandboxSimulationSchema = z
+  .object({
+    attemptId: uuid.optional(),
+    /** Référence fournisseur portée par l'URL de paiement sandbox (/sandbox/paiement/<référence>). */
+    providerReference: z.string().trim().min(8).max(100).optional(),
+    outcome: z.enum(['success', 'failure']),
+  })
+  .refine((value) => (value.attemptId === undefined) !== (value.providerReference === undefined), {
+    message: 'indiquer attemptId OU providerReference',
+    path: ['attemptId'],
+  });
 export type SandboxSimulationInput = z.infer<typeof sandboxSimulationSchema>;
 
 /** Vue d'une tentative de paiement renvoyée au web (sans donnée de santé ni numéro de téléphone). */

@@ -25,7 +25,11 @@ export class SandboxSimulationService {
     const sandbox = this.providers.getEnabled(SANDBOX_CODE);
     if (!(sandbox instanceof SandboxProvider)) throw DomainError.notFound();
 
-    const attempt = await this.db.run((tx) => this.repo.findById(tx, input.attemptId));
+    const attempt = await this.db.run((tx) =>
+      input.attemptId
+        ? this.repo.findById(tx, input.attemptId)
+        : this.repo.findByProviderReference(tx, SANDBOX_CODE, input.providerReference ?? ''),
+    );
     if (!attempt || attempt.provider !== SANDBOX_CODE || !attempt.providerReference) throw DomainError.notFound('Tentative de paiement');
 
     const status = input.outcome === 'success' ? 'succeeded' : 'failed';

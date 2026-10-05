@@ -27,4 +27,8 @@ export class FakePaymentsGateway implements PaymentsGateway {
   refresh(): Promise<{ readonly status: 'pending' }> {
     return Promise.resolve({ status: 'pending' });
   }
+
+  cancel(): Promise<{ readonly status: 'cancelled' }> {
+    return Promise.resolve({ status: 'cancelled' });
+  }
 }

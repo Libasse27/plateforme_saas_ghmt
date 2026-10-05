@@ -79,9 +79,9 @@ describe('grille tarifaire (HTTP)', () => {
     });
 
     it('crée un article avec un prix décimal exact et le relit', async () => {
-      const res = await createItem(manager, listId, { code: 'CONS-GEN', label: 'Consultation générale', category: 'consultation', unitPrice: '5000.50' }).expect(201);
+      const res = await createItem(manager, listId, { code: 'CONS-GEN', label: 'Consultation générale', category: 'consultation', unitPrice: '5000.00' }).expect(201);
 
-      expect(res.body.data).toMatchObject({ code: 'CONS-GEN', unitPrice: '5000.50', category: 'consultation', isActive: true, priceListId: listId });
+      expect(res.body.data).toMatchObject({ code: 'CONS-GEN', unitPrice: '5000.00', category: 'consultation', isActive: true, priceListId: listId });
     });
 
     it('refuse un prix flottant, un prix à 3 décimales, une catégorie inconnue (422) et un code en doublon (409)', async () => {

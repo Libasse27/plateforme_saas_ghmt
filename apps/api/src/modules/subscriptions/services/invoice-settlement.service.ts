@@ -84,11 +84,39 @@ export class InvoiceSettlementService implements OnModuleInit {
       this.logger.warn({ referenceId: payload.referenceId, outcome }, 'Paiement SaaS non appliqué : rapprochement manuel requis');
       return;
     }
-    await this.settle(payload.referenceId, {
+    const result = await this.settle(payload.referenceId, {
       paidAt: new Date(payload.settledAt),
       channel: payload.provider,
       actor: { type: 'system' },
       reference: payload.attemptId,
+    });
+    if (!result.applied) await this.auditDuplicatePayment(result.invoice, payload);
+  }
+
+  /**
+   * Facture déjà payée : un règlement d'une AUTRE tentative est un double paiement (remboursement à traiter, hors périmètre) —
+   * tracé pour rapprochement. Le rejeu de la tentative qui a payé, ou d'un doublon déjà tracé, n'ajoute rien.
+   */
+  private async auditDuplicatePayment(invoice: SaasInvoice, payload: PaymentSettledPayload): Promise<void> {
+    await this.platformDb.run(async (tx) => {
+      const entries = await tx.platformAuditLog.findMany({
+        where: { resourceId: invoice.id, action: { in: ['saas_invoice.paid', 'saas_invoice.duplicate_payment'] } },
+        select: { action: true, changes: true },
+      });
+      const known = entries.some((entry) => {
+        const changes = (entry.changes ?? {}) as { reference?: string; attemptId?: string };
+        return changes.reference === payload.attemptId || changes.attemptId === payload.attemptId;
+      });
+      if (known) return;
+      await this.audit.record(tx, {
+        action: 'saas_invoice.duplicate_payment',
+        actor: { type: 'system' },
+        resourceType: 'saas_invoice',
+        resourceId: invoice.id,
+        tenantId: invoice.tenantId,
+        outcome: 'denied',
+        changes: { attemptId: payload.attemptId, provider: payload.provider, amount: payload.amount, currency: payload.currency },
+      });
     });
   }
 
@@ -123,10 +151,45 @@ export class InvoiceSettlementService implements OnModuleInit {
       changes: { number: invoice.number, channel: meta.channel, reference: meta.reference, total: invoice.total.toFixed(2) },
     });
 
-    // Les factures de prorata ne renouvellent rien : le plan est déjà appliqué à l'émission.
-    if (invoice.kind === 'upgrade_prorata') return { invoice: paid, applied: true, changes: [] };
+    // Les factures de prorata ne renouvellent rien : leur règlement applique le plan demandé (montée en gamme).
+    if (invoice.kind === 'upgrade_prorata') {
+      await this.applyUpgrade(tx, paid, meta);
+      return { invoice: paid, applied: true, changes: [] };
+    }
     const change = await this.activate(tx, paid, meta);
     return { invoice: paid, applied: true, changes: change ? [change] : [] };
+  }
+
+  /**
+   * Règlement du prorata d'une montée en gamme : le plan demandé (`pendingPlanId`) est appliqué, droits et modules relevés.
+   * Un prorata dont le plan n'est plus celui de la demande en cours (remplacé entre-temps) n'applique rien.
+   */
+  private async applyUpgrade(tx: PlatformTx, invoice: SaasInvoice, meta: { paidAt: Date; actor: PlatformActor }): Promise<void> {
+    const subscription = await this.repository.lockById(tx, invoice.subscriptionId);
+    if (!subscription) throw DomainError.notFound('Abonnement');
+    if (subscription.pendingPlanId !== invoice.planId) {
+      await this.audit.record(tx, {
+        action: 'saas_invoice.prorata_not_applied',
+        actor: meta.actor,
+        resourceType: 'saas_invoice',
+        resourceId: invoice.id,
+        tenantId: invoice.tenantId,
+        outcome: 'denied',
+        changes: { reason: 'upgrade_superseded' },
+      });
+      return;
+    }
+    const refreshed = await tx.subscription.update({ where: { id: subscription.id }, data: { planId: invoice.planId, pendingPlanId: null } });
+    const plan = await this.repository.findPlan(tx, refreshed.planId);
+    if (plan) await this.modules.sync(tx, refreshed.tenantId, plan, refreshed, meta.paidAt);
+    await this.audit.record(tx, {
+      action: 'subscription.upgrade_applied',
+      actor: meta.actor,
+      resourceType: 'subscription',
+      resourceId: subscription.id,
+      tenantId: invoice.tenantId,
+      changes: { planCode: plan?.code ?? null, invoice: invoice.number },
+    });
   }
 
   /** Renouvelle/réactive l'abonnement : nouvelle période, plan éventuellement planifié, droits et modules synchronisés. */

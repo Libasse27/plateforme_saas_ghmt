@@ -66,12 +66,12 @@ export class SubscriptionsRepository {
     return { countryCode: entity.countryCode.trim(), taxRate: entity.taxRate.toFixed(4) };
   }
 
-  /** Décomptes d'usage via la fonction SECURITY DEFINER (comptes uniquement, aucune donnée patient). */
-  async usageOf(tx: PlatformTx, tenantIds: readonly string[] | null, now: Date): Promise<TenantUsageRow[]> {
+  /** Décomptes d'usage via la fonction SECURITY DEFINER (comptes uniquement, aucune donnée patient ; instant `now()` imposé par la base). */
+  async usageOf(tx: PlatformTx, tenantIds: readonly string[] | null): Promise<TenantUsageRow[]> {
     const rows = await tx.$queryRaw<
       { tenant_id: string; users: number; sites: number; patients: number; appointments_month: number; appointments_30d: number }[]
     >`SELECT tenant_id::text AS tenant_id, users, sites, patients, appointments_month, appointments_30d
-      FROM platform.tenants_usage(${tenantIds === null ? null : [...tenantIds]}::uuid[], ${now}::timestamptz)`;
+      FROM platform.tenants_usage(${tenantIds === null ? null : [...tenantIds]}::uuid[])`;
     return rows.map((r) => ({
       tenantId: r.tenant_id,
       users: r.users,

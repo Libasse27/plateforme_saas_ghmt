@@ -1,5 +1,13 @@
 import { Injectable } from '@nestjs/common';
-import { entitlementsSchema, type ChangePlanInput, type ChangePlanResult, type PublicPlanView, type SubscriptionView } from '@ghmt/shared';
+import {
+  TRIAL_SELECTABLE_PLAN_CODES,
+  entitlementsSchema,
+  type ChangePlanInput,
+  type ChangePlanResult,
+  type PublicPlanView,
+  type SubscriptionStatusView,
+  type SubscriptionView,
+} from '@ghmt/shared';
 import { AuditService } from '../../../common/audit/audit.service';
 import { EntitlementService } from '../../../common/authz/entitlement.service';
 import { RequestContext } from '../../../common/context/request-context';
@@ -7,6 +15,7 @@ import { DomainError } from '../../../common/errors/domain-error';
 import { Clock } from '../../../common/time/clock';
 import { TenantDb } from '../../../infrastructure/prisma/tenant-db.service';
 import { toPlanSummary, toSaasInvoiceView, toSubscriptionView } from '../mappers/subscription.mapper';
+import { accessModeOf, trialDaysLeft } from '../domain/access-mode';
 import { PlanChangeService } from './plan-change.service';
 import { PlatformDb } from '../../../infrastructure/prisma/platform-db.service';
 
@@ -32,15 +41,36 @@ export class SubscriptionsService {
     });
   }
 
+  /** Statut et mode d'accès (R1) : lisible par tout utilisateur de l'établissement, sans aucune donnée financière. */
+  status(): Promise<SubscriptionStatusView> {
+    return this.tenantDb.run(async (tx) => {
+      const current = await this.entitlements.getInTx(tx);
+      if (!current) throw DomainError.notFound('Abonnement');
+      const { status, trialEndsAt } = current.subscription;
+      return {
+        status,
+        trialEndsAt: status === 'trial' ? (trialEndsAt?.toISOString() ?? null) : null,
+        daysLeft: trialDaysLeft(status, trialEndsAt, this.clock.now()),
+        mode: accessModeOf(status),
+      };
+    });
+  }
+
   /** Offres publiques en vigueur (dernière version non archivée de chaque code), pour le changement de plan. */
   async listPlans(): Promise<PublicPlanView[]> {
+    const inTrial = (await this.tenantDb.run((tx) => this.entitlements.getInTx(tx)))?.subscription.status === 'trial';
     const plans = await this.platformDb.run((tx) =>
       tx.plan.findMany({ where: { isPublic: true, archivedAt: null }, orderBy: [{ code: 'asc' }, { version: 'desc' }] }),
     );
     const latestByCode = new Map(plans.map((plan) => [plan.code, plan] as const).reverse());
     return [...latestByCode.values()]
       .sort((a, b) => Number(a.priceMonthly) - Number(b.priceMonthly))
-      .map((plan) => ({ ...toPlanSummary(plan), entitlements: entitlementsSchema.parse(plan.entitlements) }));
+      .map((plan) => ({
+        ...toPlanSummary(plan),
+        entitlements: entitlementsSchema.parse(plan.entitlements),
+        // Pendant l'essai, seules les offres basic et standard peuvent être choisies.
+        selectable: !inTrial || (TRIAL_SELECTABLE_PLAN_CODES as readonly string[]).includes(plan.tier),
+      }));
   }
 
   async change(input: ChangePlanInput): Promise<ChangePlanResult> {

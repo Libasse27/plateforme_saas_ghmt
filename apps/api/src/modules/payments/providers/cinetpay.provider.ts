@@ -42,6 +42,18 @@ const NOTIFICATION_FIELDS = [
   'cpm_error_message',
 ] as const;
 
+/** Champs d'une notification qui peuvent contenir des données personnelles du payeur. */
+const PERSONAL_NOTIFICATION_FIELDS: ReadonlySet<string> = new Set([
+  'cel_phone_num',
+  'cpm_phone_prefixe',
+  'cpm_custom',
+  'cpm_designation',
+  'customer_name',
+  'customer_surname',
+  'customer_email',
+  'customer_phone_number',
+]);
+
 type FetchLike = typeof fetch;
 
 interface CinetPayResponse {
@@ -96,7 +108,7 @@ export class CinetPayProvider implements PaymentProvider {
     };
     const response = await this.post('/payment', body);
     const checkoutUrl = response.data?.payment_url;
-    if (response.code !== '201' || !checkoutUrl) throw new ProviderError(this.code, `Création refusée (code ${response.code ?? 'inconnu'})`);
+    if (response.code !== '201' || !checkoutUrl) throw new ProviderError(this.code, `Création refusée (code ${response.code ?? 'inconnu'})`, 'refused');
     return { checkoutUrl, instructions: 'Validez le paiement sur la page de l’opérateur ou sur votre téléphone.' };
   }
 
@@ -128,6 +140,14 @@ export class CinetPayProvider implements PaymentProvider {
     // CinetPay n'envoie pas d'identifiant d'événement : référence + empreinte du corps (un rejeu strict est dédoublonné).
     const digest = createHash('sha256').update(rawBody).digest('hex').slice(0, 24);
     return { valid: true, eventId: `${reference}:${digest}`, providerReference: reference };
+  }
+
+  /** Champs personnels de la notification CinetPay, jamais conservés (téléphone, préfixe, données libres du payeur). */
+  redactWebhookBody(rawBody: Buffer): string {
+    const fields = this.parseNotification(rawBody);
+    if (!fields) return '[corps illisible non conservé]';
+    const kept = Object.fromEntries(Object.entries(fields).filter(([name]) => !PERSONAL_NOTIFICATION_FIELDS.has(name)));
+    return JSON.stringify(kept);
   }
 
   private parseNotification(rawBody: Buffer): Record<string, string> | undefined {
@@ -170,7 +190,9 @@ export class CinetPayProvider implements PaymentProvider {
     const parsed = (await response.json().catch(() => undefined)) as CinetPayResponse | undefined;
     // 404 avec code métier = « transaction introuvable » (lisible) ; tout autre statut HTTP en erreur est une panne ou un refus.
     if (!parsed || typeof parsed !== 'object' || (!response.ok && !(response.status === 404 && parsed.code))) {
-      throw new ProviderError(this.code, `Réponse invalide (HTTP ${response.status})`);
+      // Un 4xx accompagné d'un code métier est un refus explicite ; tout le reste (5xx, corps illisible) est une panne.
+      const refused = Boolean(parsed && typeof parsed === 'object' && parsed.code && response.status >= 400 && response.status < 500);
+      throw new ProviderError(this.code, `Réponse invalide (HTTP ${response.status})`, refused ? 'refused' : 'technical');
     }
     return parsed;
   }

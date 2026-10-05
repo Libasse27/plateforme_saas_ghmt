@@ -2,14 +2,14 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { createInvoiceSchema, voidInvoiceSchema } from '@ghmt/shared';
+import { createInvoiceSchema } from '@ghmt/shared';
 import { isApiError } from '@/lib/api/errors';
 import { hasPermission } from '@/lib/auth/me';
-import { parseDraftLines } from '@/lib/domain/billing';
+import { buildVoidInput, parseDraftLines } from '@/lib/domain/billing';
 import { str, rec } from '@/lib/domain/raw';
 import { fieldErrorsFromZod, formDataToFlat, publicValues, type FormState } from '@/lib/forms';
 import { actionApi } from '@/server/api';
-import { currentMe, INVALID_REQUEST, pathId } from './context';
+import { currencyOf, currentMe, INVALID_REQUEST, pathId } from './context';
 import { failureState, invalidState } from './helpers';
 
 const INVOICES_PATH = '/facturation/factures';
@@ -26,7 +26,7 @@ export async function createInvoiceAction(_prev: FormState, formData: FormData):
   let invoiceId: string;
   try {
     const me = await currentMe();
-    const lines = parseDraftLines(flat.lines, hasPermission(me, 'billing:invoice:update'));
+    const lines = parseDraftLines(flat.lines, hasPermission(me, 'billing:invoice:update'), currencyOf(flat.currency));
     if (!lines.ok) errors.lines = lines.error;
     const parsed = createInvoiceSchema.safeParse({
       patientId: flat.patientId,
@@ -81,10 +81,10 @@ export async function voidInvoiceAction(_prev: FormState, formData: FormData): P
   const flat = formDataToFlat(formData);
   const id = pathId(flat.invoiceId);
   if (!id) return INVALID_REQUEST;
-  const parsed = voidInvoiceSchema.safeParse({ reason: flat.reason });
-  if (!parsed.success) return invalidState({ reason: 'Indiquez le motif de l\'annulation (3 caractères au moins).' }, publicValues(flat));
+  const built = buildVoidInput(flat);
+  if (!built.ok) return invalidState(built.fieldErrors, publicValues(flat));
   try {
-    await actionApi(`/billing/invoices/${id}/void`, { method: 'POST', body: parsed.data });
+    await actionApi(`/billing/invoices/${id}/void`, { method: 'POST', body: built.body });
   } catch (error) {
     return failureState(error, publicValues(flat));
   }

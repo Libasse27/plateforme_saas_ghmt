@@ -18,6 +18,21 @@ export const positiveMoneyAmount = moneyAmount.refine((value) => /[1-9]/.test(va
 /** Code de devise ISO 4217 (XOF, XAF, EUR…). */
 export const currencyCode = z.string().regex(/^[A-Z]{3}$/, 'devise ISO 4217 en majuscules');
 
+/** Devises sans subdivision en usage : montants et prix entiers (docs/09 §R7). */
+export const ZERO_DECIMAL_CURRENCIES = ['XOF', 'XAF', 'GNF', 'CDF'] as const;
+
+/** Nombre de décimales admis pour les montants d'une devise (0 pour XOF, XAF, GNF, CDF ; 2 sinon). */
+export function currencyScale(currency: string): 0 | 2 {
+  return (ZERO_DECIMAL_CURRENCIES as readonly string[]).includes(currency) ? 0 : 2;
+}
+
+/** Vrai si le montant décimal en chaîne respecte l'échelle de la devise ("1500.00" est admis en XOF, "1500.50" non). */
+export function hasValidCurrencyScale(amount: string, currency: string): boolean {
+  if (currencyScale(currency) === 2) return true;
+  const fraction = amount.split('.')[1];
+  return fraction === undefined || /^0*$/.test(fraction);
+}
+
 /** Simulation d'une issue de paiement par le fournisseur sandbox (développement et tests uniquement). */
 export const sandboxSimulationSchema = z
   .object({

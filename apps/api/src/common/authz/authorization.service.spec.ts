@@ -60,9 +60,16 @@ describe('evaluateAuthorization', () => {
   describe('tenant suspendu : continuité des soins (docs/09 §A3)', () => {
     const suspended = { ...base, tenantStatus: 'suspended' } as const;
     const allowedWith = (permission: EffectiveGrant['permission']) =>
-      evaluateAuthorization({ ...suspended, required: [permission], grants: [grant(permission)], enabledModules: new Set(['patients', 'cashier', 'billing', 'iam', 'org']) });
+      evaluateAuthorization({ ...suspended, required: [permission], grants: [grant(permission)], enabledModules: new Set(['patients', 'cashier', 'billing', 'iam', 'org', 'appointments']) });
 
-    it.each(['patients:patient:create', 'cashier:payment:create', 'cashier:cash_session:create'] as const)('autorise %s', (permission) => {
+    it.each([
+      'patients:patient:create',
+      'billing:invoice:create',
+      'cashier:payment:create',
+      'cashier:cash_session:create',
+      'cashier:cash_session:validate',
+      'appointments:appointment:update',
+    ] as const)('autorise %s', (permission) => {
       expect(allowedWith(permission)).toEqual({ allowed: true });
     });
 
@@ -71,7 +78,7 @@ describe('evaluateAuthorization', () => {
       expect(allowedWith('billing:invoice:print')).toEqual({ allowed: true });
     });
 
-    it.each(['patients:patient:update', 'patients:patient:delete', 'billing:invoice:create', 'iam:user:create', 'org:site:create'] as const)(
+    it.each(['patients:patient:update', 'patients:patient:delete', 'billing:invoice:validate', 'billing:invoice:update', 'iam:user:create', 'org:site:create'] as const)(
       'refuse %s',
       (permission) => {
         expect(allowedWith(permission)).toMatchObject({ allowed: false, reason: 'subscription_suspended' });
@@ -98,16 +105,16 @@ describe('evaluateAuthorization', () => {
   describe('abonnement en grace : actions administratives non essentielles bloquées (docs/05 A6)', () => {
     const grace = { ...base, subscriptionStatus: 'grace' } as const;
     const decide = (permission: EffectiveGrant['permission']) =>
-      evaluateAuthorization({ ...grace, required: [permission], grants: [grant(permission)], enabledModules: new Set(['patients', 'iam', 'billing', 'org']) });
+      evaluateAuthorization({ ...grace, required: [permission], grants: [grant(permission)], enabledModules: new Set(['patients', 'iam', 'billing', 'org', 'consultations']) });
 
-    it.each(['iam:user:create', 'iam:invitation:create', 'patients:patient:export', 'billing:invoice:export', 'iam:user:export'] as const)(
+    it.each(['iam:user:create', 'iam:invitation:create', 'billing:invoice:export', 'iam:user:export'] as const)(
       'refuse %s',
       (permission) => {
         expect(decide(permission)).toMatchObject({ allowed: false, reason: 'subscription_grace', permission });
       },
     );
 
-    it.each(['patients:patient:create', 'patients:patient:update', 'patients:patient:read', 'org:site:create'] as const)('autorise %s (les soins restent complets)', (permission) => {
+    it.each(['patients:patient:create', 'patients:patient:update', 'patients:patient:read', 'org:site:create', 'patients:patient:export', 'consultations:medical_record:export'] as const)('autorise %s (les soins et les droits du patient restent complets)', (permission) => {
       expect(decide(permission)).toEqual({ allowed: true });
     });
 

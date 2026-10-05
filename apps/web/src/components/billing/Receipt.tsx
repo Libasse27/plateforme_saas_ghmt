@@ -1,15 +1,26 @@
-import type { ReceiptView } from '@ghmt/shared';
-import { CATEGORY_LABELS, INVOICE_STATUS_LABELS, PAYMENT_METHOD_LABELS } from '@/lib/domain/billing';
+import { CATEGORY_LABELS, INVOICE_STATUS_LABELS, PAYMENT_METHOD_LABELS, patientDisplay, receiptLabel, type ReceiptData } from '@/lib/domain/billing';
 import { formatMoney } from '@/lib/domain/money';
 import { formatDateTime, formatDay } from '@/lib/format/dates';
 
 /** Reçu imprimable (A5/A4) : mise en page sobre, contraste élevé, sans élément interactif. */
-export function Receipt({ receipt, timeZone }: { readonly receipt: ReceiptView; readonly timeZone: string }) {
+export function Receipt({ receipt, timeZone }: { readonly receipt: ReceiptData; readonly timeZone: string }) {
   const { invoice } = receipt;
   const currency = invoice.currency;
+  const voided = receipt.voided || invoice.status === 'void';
   const succeeded = invoice.payments.filter((payment) => payment.status === 'succeeded');
   return (
-    <article className="receipt mx-auto max-w-2xl rounded-md border border-slate-400 bg-white p-6 text-slate-900 print:max-w-none print:border-0 print:p-0" aria-label={`Reçu ${invoice.number ?? ''}`}>
+    <article className="receipt mx-auto max-w-2xl rounded-md border border-slate-400 bg-white p-6 text-slate-900 print:max-w-none print:border-0 print:p-0 relative overflow-hidden" aria-label={`Reçu ${invoice.number ?? ''}`}>
+      {voided ? (
+        <div
+          aria-hidden="true"
+          data-testid="receipt-watermark"
+          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center"
+        >
+          <span className="-rotate-[30deg] select-none rounded-md border-8 border-red-700 px-6 py-2 text-7xl font-black uppercase tracking-widest text-red-700 opacity-40 print:opacity-50">
+            ANNULÉE
+          </span>
+        </div>
+      ) : null}
       <header className="mb-4 border-b border-slate-400 pb-3">
         <h1 className="text-xl font-bold">{receipt.establishment}</h1>
         {receipt.site ? <p>{receipt.site}</p> : null}
@@ -18,8 +29,8 @@ export function Receipt({ receipt, timeZone }: { readonly receipt: ReceiptView; 
       </header>
 
       <p className="mb-4">
-        Patient : <strong>{invoice.patient.fullName}</strong>
-        {invoice.patient.ipp ? <> · Dossier {invoice.patient.ipp}</> : null}
+        <strong>{patientDisplay(invoice.patient)}</strong>
+        {invoice.patient.ipp && !invoice.patient.identityMasked ? <> · Dossier {invoice.patient.ipp}</> : null}
       </p>
 
       <table className="mb-4 w-full text-left text-sm">
@@ -35,7 +46,7 @@ export function Receipt({ receipt, timeZone }: { readonly receipt: ReceiptView; 
         <tbody>
           {invoice.lines.map((line) => (
             <tr key={line.id || line.lineNo} className="border-b border-slate-200">
-              <td className="py-1">{line.description} <span className="text-xs">({CATEGORY_LABELS[line.category]})</span></td>
+              <td className="py-1">{receiptLabel(line)} <span className="text-xs">({CATEGORY_LABELS[line.category]})</span></td>
               <td className="py-1 text-right tabular-nums">{line.quantity}</td>
               <td className="py-1 text-right tabular-nums">{formatMoney(line.unitPrice, currency)}</td>
               <td className="py-1 text-right tabular-nums">{formatMoney(line.lineTotal, currency)}</td>

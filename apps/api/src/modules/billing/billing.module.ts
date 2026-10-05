@@ -11,6 +11,7 @@ import { InvoiceLinesResolver } from './services/invoice-lines.resolver';
 import { InvoicePaymentsService } from './services/invoice-payments.service';
 import { InvoicesService } from './services/invoices.service';
 import { OnlinePaymentEventsService } from './services/online-payment-events.service';
+import { RefreshThrottle } from './services/refresh-throttle';
 import { PriceListsService } from './services/price-lists.service';
 import { SiteScopeService } from './services/site-scope.service';
 
@@ -32,6 +33,7 @@ import { SiteScopeService } from './services/site-scope.service';
     OnlinePaymentEventsService,
     CashRegistersService,
     CashSessionsService,
+    RefreshThrottle,
   ],
 })
 export class BillingModule {}

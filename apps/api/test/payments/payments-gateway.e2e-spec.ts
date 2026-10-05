@@ -88,7 +88,7 @@ describe('payments : routage et fournisseurs inactifs', () => {
     try {
       const tenant = await createTenantFixture(app);
 
-      await expect(gatewayOf(app).initiate(initiateInput(tenant.tenantId))).rejects.toMatchObject({ status: 503, code: 'no_payment_provider' });
+      await expect(gatewayOf(app).initiate(initiateInput(tenant.tenantId))).rejects.toMatchObject({ status: 503, code: 'payment_provider_unavailable' });
     } finally {
       await app.close();
     }

@@ -63,6 +63,14 @@ describe('createInvoiceAction', () => {
     expect(calls.find((c) => c.path === '/billing/invoices')?.body).toMatchObject({ lines: [{ description: 'Pansement', unitPrice: '1500.00', category: 'acte', quantity: '1' }] });
   });
 
+  it('FCFA : refuse un prix de ligne libre avec décimales (aucun appel)', async () => {
+    const { calls } = stubApi(() => okEnvelope({ id: INVOICE }, {}, 201), { ...ME, permissions: [...ME.permissions, 'billing:invoice:update'] });
+    const lines = JSON.stringify([{ kind: 'free', description: 'Pansement', category: 'acte', unitPrice: '1500,5', quantity: '1' }]);
+    const state = await createInvoiceAction({}, form({ patientId: PATIENT, siteId: SITE, lines, currency: 'XOF' }));
+    expect(state.fieldErrors?.lines).toContain('sans décimales');
+    expect(calls.some((c) => c.path === '/billing/invoices')).toBe(false);
+  });
+
   it('patient ou site manquant : messages explicites', async () => {
     stubApi(() => undefined);
     const state = await createInvoiceAction({}, form({ lines: CATALOG_LINES }));
@@ -94,15 +102,23 @@ describe('issueInvoiceAction / voidInvoiceAction', () => {
   });
   it('annule avec un motif obligatoire', async () => {
     const { calls } = stubApi(() => okEnvelope({ id: INVOICE }));
-    const missing = await voidInvoiceAction({}, form({ invoiceId: INVOICE, reason: 'a' }));
-    expect(missing.fieldErrors?.reason).toBeDefined();
+    const missing = await voidInvoiceAction({}, form({ invoiceId: INVOICE, reasonCode: 'inconnu' }));
+    expect(missing.fieldErrors?.reasonCode).toBeDefined();
     expect(calls.some((c) => c.path.endsWith('/void'))).toBe(false);
-    expect((await voidInvoiceAction({}, form({ invoiceId: INVOICE, reason: 'Erreur de saisie' }))).message).toBe('Facture annulée.');
-    expect(calls.at(-1)?.body).toEqual({ reason: 'Erreur de saisie' });
+    expect((await voidInvoiceAction({}, form({ invoiceId: INVOICE, reasonCode: 'duplicate' }))).message).toBe('Facture annulée.');
+    expect(calls.at(-1)?.body).toEqual({ reasonCode: 'duplicate' });
+    await voidInvoiceAction({}, form({ invoiceId: INVOICE, reasonCode: 'other', comment: ' erreur de caisse ' }));
+    expect(calls.at(-1)?.body).toEqual({ reasonCode: 'other', comment: 'erreur de caisse' });
+  });
+  it('refuse un commentaire de plus de 300 caractères (aucun appel)', async () => {
+    const { calls } = stubApi(() => okEnvelope({ id: INVOICE }));
+    const state = await voidInvoiceAction({}, form({ invoiceId: INVOICE, reasonCode: 'other', comment: 'x'.repeat(301) }));
+    expect(state.fieldErrors?.comment).toContain('300');
+    expect(calls.some((c) => c.path.endsWith('/void'))).toBe(false);
   });
   it('409 invoice_has_payments à l\'annulation', async () => {
     stubApi(() => problem(409, 'invoice_has_payments'));
-    expect((await voidInvoiceAction({}, form({ invoiceId: INVOICE, reason: 'Erreur de saisie' }))).message).toContain('encaissements');
-    expect((await voidInvoiceAction({}, form({ invoiceId: 'x', reason: 'Erreur de saisie' }))).ok).toBe(false);
+    expect((await voidInvoiceAction({}, form({ invoiceId: INVOICE, reasonCode: 'wrong_price' }))).message).toContain('encaissements');
+    expect((await voidInvoiceAction({}, form({ invoiceId: 'x', reasonCode: 'wrong_price' }))).ok).toBe(false);
   });
 });

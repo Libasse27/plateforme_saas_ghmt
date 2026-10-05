@@ -42,11 +42,17 @@ const BY_CODE: Readonly<Record<string, string>> = {
   cash_register_code_taken: 'Ce code de caisse existe déjà pour ce site.',
   site_out_of_scope: 'Ce site est hors de votre périmètre.',
   separation_of_duties: 'La validation doit être faite par un autre utilisateur que celui qui a ouvert ou clôturé la session (séparation des tâches).',
+  amount_scale: 'Cette devise n\'a pas de subdivision : saisissez un montant entier, sans décimales.',
+  payment_provider_unavailable: 'Le fournisseur de paiement est momentanément indisponible. Réessayez dans quelques minutes ou choisissez un autre mode de paiement.',
+  invoice_not_issued: 'Cette facture n\'est pas encore émise : le reçu n\'est disponible qu\'après émission.',
+  cash_register_site_mismatch: 'La caisse de votre session n\'est pas sur le même site que la facture. Ouvrez une session sur une caisse du site de la facture.',
+  payment_not_pending: 'Ce paiement n\'est plus en attente : actualisez la page.',
   // Abonnement SaaS
   no_change: 'Vous êtes déjà sur ce plan avec cette périodicité.',
   invalid_state: 'Cette action n\'est pas possible dans l\'état actuel de l\'abonnement.',
   subscription_grace: 'Votre abonnement est en période de grâce : cette action est bloquée jusqu\'au règlement de la facture en retard.',
   payments_unavailable: 'Le service de paiement est momentanément indisponible. Réessayez dans quelques minutes.',
+  plan_not_allowed_in_trial: 'Cette offre n\'est pas disponible pendant la période d\'essai. Choisissez-la après l\'essai.',
   // Console plateforme
   four_eyes_required: 'Règle des quatre yeux : la décision doit être prise par un autre administrateur que celui qui a saisi le paiement.',
   already_suspended: 'Cet établissement est déjà suspendu.',
@@ -59,6 +65,7 @@ const BY_CODE: Readonly<Record<string, string>> = {
   manual_payment_decided: 'Ce paiement manuel a déjà été validé ou rejeté.',
   invalid_code: 'Code invalide ou expiré.',
   mfa_not_pending: 'Aucun enrôlement en cours : recommencez la génération du QR code.',
+  mfa_enrollment_required_cli: 'Ce compte doit d\'abord être activé par l\'équipe d\'exploitation (enrôlement du second facteur).',
   mfa_enrollment_required: 'Activez l\'authentification à deux facteurs pour accéder à la console plateforme.',
 };
 
@@ -73,7 +80,7 @@ const BY_STATUS: Readonly<Record<number, string>> = {
   410: 'Ce lien n\'est plus valide.',
   412: 'Cette fiche a été modifiée entre-temps. Rechargez-la avant de réessayer.',
   428: 'Rechargez la page avant de modifier cette fiche.',
-  429: 'Trop de tentatives. Patientez un instant avant de réessayer.',
+  429: 'Trop de tentatives, réessayez dans quelques instants.',
 };
 
 const METRIC_LABELS: Readonly<Record<string, string>> = { users: 'utilisateurs', sites: 'sites', appointmentsMonthly: 'rendez-vous du mois' };

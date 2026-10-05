@@ -8,7 +8,15 @@ import { buttonClass } from '@/components/ui/styles';
 import type { Banner } from '@/lib/domain/subscription';
 import { NavLink } from './NavLink';
 
-export function AppShell({ me, banner, children }: { readonly me: Me; readonly banner?: Banner | null | undefined; readonly children: ReactNode }) {
+export interface AppShellProps {
+  readonly me: Me;
+  readonly banner?: Banner | null | undefined;
+  /** Administrateurs : lien vers la page d'abonnement. */
+  readonly canManageSubscription?: boolean | undefined;
+  readonly children: ReactNode;
+}
+
+export function AppShell({ me, banner, canManageSubscription = false, children }: AppShellProps) {
   const items = visibleNav(me);
   return (
     <div className="min-h-screen bg-slate-50 md:flex">
@@ -34,7 +42,7 @@ export function AppShell({ me, banner, children }: { readonly me: Me; readonly b
           <div className="print:hidden" data-testid="subscription-banner">
             <Alert tone={banner.tone}>
               {banner.message}{' '}
-              <Link href="/abonnement" className="font-semibold underline">Voir l&apos;abonnement</Link>
+              {canManageSubscription ? <Link href="/abonnement" className="font-semibold underline">Voir l&apos;abonnement</Link> : null}
             </Alert>
           </div>
         ) : null}

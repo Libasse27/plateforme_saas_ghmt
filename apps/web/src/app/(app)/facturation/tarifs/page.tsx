@@ -10,6 +10,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { settle } from '@/lib/api/settle';
 import { canUse } from '@/lib/auth/me';
 import { toPriceList, toPriceListItem, CATEGORY_LABELS } from '@/lib/domain/billing';
+import { isZeroDecimalCurrency } from '@/lib/domain/money';
 import { isUuid, items } from '@/lib/domain/raw';
 import { pageApi } from '@/server/api';
 import { requireMe } from '@/server/me';
@@ -80,12 +81,14 @@ export default async function PricingPage({ searchParams }: { readonly searchPar
                 <ActionForm
                   action={createPriceItemAction}
                   idPrefix="item-"
-                  hidden={{ priceListId: selected.id }}
+                  hidden={{ priceListId: selected.id, currency: selected.currency }}
                   fields={[
                     { kind: 'text', name: 'code', label: 'Code', required: true, hint: 'Lettres, chiffres, point ou tiret (ex. CONS-01).' },
                     { kind: 'text', name: 'label', label: 'Libellé', required: true },
                     { kind: 'select', name: 'category', label: 'Catégorie', options: CATEGORY_OPTIONS, required: true },
-                    { kind: 'text', name: 'unitPrice', label: `Prix unitaire (${selected.currency})`, required: true, inputMode: 'decimal', hint: 'Ex. 5 000' },
+                    { kind: 'text', name: 'unitPrice', label: `Prix unitaire (${selected.currency})`, required: true, inputMode: isZeroDecimalCurrency(selected.currency) ? 'numeric' : 'decimal', hint: isZeroDecimalCurrency(selected.currency) ? 'Montant entier, sans décimales. Ex. 5 000' : 'Ex. 5 000' },
+                    { kind: 'checkbox', name: 'isSensitive', label: 'Acte sensible', hint: 'Son libellé est masqué pour le personnel sans accès clinique et sur le reçu.' },
+                    { kind: 'text', name: 'printLabel', label: 'Libellé imprimé', hint: 'Libellé neutre affiché à la place du libellé réel. Ne saisissez aucune information médicale.' },
                   ]}
                   submitLabel="Ajouter l'article"
                   pendingLabel="Ajout…"

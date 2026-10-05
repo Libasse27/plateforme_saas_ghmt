@@ -44,13 +44,22 @@ export interface PaymentProvider {
   getTransactionStatus(providerReference: string): Promise<ProviderTransaction>;
   /** Authenticité du webhook (signature en temps constant) et extraction de l'identifiant d'événement et de la référence. */
   verifyWebhook(headers: WebhookHeaders, rawBody: Buffer): WebhookVerification;
+  /** Corps du webhook à CONSERVER : expurgé des téléphones et identifiants personnels du payeur (docs/09 §R). */
+  redactWebhookBody(rawBody: Buffer): string;
 }
 
 /** Erreur d'appel à un agrégateur (réseau, statut HTTP, réponse inattendue). Le message ne contient jamais de secret. */
+export type ProviderErrorKind =
+  /** Réseau, délai dépassé, 5xx, réponse illisible : l'état réel chez l'agrégateur est inconnu. */
+  | 'technical'
+  /** L'agrégateur a répondu et refusé la demande (paramètres, compte…) : aucune transaction n'existe chez lui. */
+  | 'refused';
+
 export class ProviderError extends Error {
   constructor(
     readonly provider: string,
     message: string,
+    readonly kind: ProviderErrorKind = 'technical',
   ) {
     super(message);
     this.name = 'ProviderError';

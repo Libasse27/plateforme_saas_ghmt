@@ -3,6 +3,10 @@ import {
   canPaySaasInvoice,
   changeResultMessage,
   checkoutRedirectTarget,
+  statusBanner,
+  toSubscriptionStatus,
+  CONTINUITY_MESSAGE,
+  RESTRICTED_MESSAGE,
   subscriptionBanner,
   subscriptionHeadline,
   toChangePlanResult,
@@ -144,7 +148,7 @@ describe('changeResultMessage', () => {
     expect(scheduled).toContain('20/10/2026');
     const pending = changeResultMessage({ effect: 'pending_payment', subscription: sub, invoice: toSaasInvoice({ number: 'GHMT-1', total: '1000.00', currency: 'XOF' }) }, 'Africa/Dakar');
     expect(pending).toContain('GHMT-1');
-    expect(pending).toContain('paiement');
+    expect(pending).toContain('Le nouveau plan sera activé dès le paiement de la facture');
   });
   it('mentionne la facture émise lors d\'un changement immédiat', () => {
     expect(changeResultMessage({ effect: 'immediate', subscription: sub, invoice: toSaasInvoice({ number: 'GHMT-2', total: '500.00' }) }, 'Africa/Dakar')).toContain('GHMT-2');
@@ -183,5 +187,33 @@ describe('statusTone', () => {
     expect(statusTone('grace')).toBe('warning');
     expect(statusTone('suspended')).toBe('danger');
     expect(statusTone('cancelled')).toBe('neutral');
+  });
+});
+
+describe('R1 : bandeau d\'abonnement du personnel', () => {
+  it('mappe le statut léger et refuse un mode inconnu', () => {
+    expect(toSubscriptionStatus({ status: 'trial', trialEndsAt: null, daysLeft: null, mode: 'normal' })).toEqual({ status: 'trial', trialEndsAt: null, daysLeft: null, mode: 'normal' });
+    expect(toSubscriptionStatus({ mode: 'autre' })).toBeNull();
+    expect(toSubscriptionStatus(null)).toBeNull();
+  });
+  it('restricted et continuity affichent les messages du personnel', () => {
+    expect(statusBanner({ status: 'grace', trialEndsAt: null, daysLeft: null, mode: 'restricted' })).toEqual({ tone: 'warning', message: 'Abonnement en retard de paiement : certaines actions administratives sont limitées.' });
+    expect(RESTRICTED_MESSAGE).toContain('limitées');
+    expect(statusBanner({ status: 'suspended', trialEndsAt: null, daysLeft: null, mode: 'continuity' })).toEqual({
+      tone: 'error',
+      message: 'Mode continuité des soins : consultation, création de patient, facturation et encaissement restent possibles.',
+    });
+    expect(CONTINUITY_MESSAGE).toContain('continuité');
+  });
+  it('essai : « Période d\'essai — J-x » seulement si daysLeft est connu', () => {
+    expect(statusBanner({ status: 'trial', trialEndsAt: 'x', daysLeft: 12, mode: 'normal' })).toEqual({ tone: 'info', message: 'Période d\'essai — J-12' });
+    expect(statusBanner({ status: 'trial', trialEndsAt: null, daysLeft: null, mode: 'normal' })).toBeNull();
+    expect(statusBanner({ status: 'trial', trialEndsAt: 'x', daysLeft: -1, mode: 'normal' })).toBeNull();
+    expect(statusBanner({ status: 'active', trialEndsAt: null, daysLeft: null, mode: 'normal' })).toBeNull();
+  });
+  it('offre : selectable vaut false seulement si l\'API le dit', () => {
+    expect(toPublicPlan({ code: 'premium', selectable: false }).selectable).toBe(false);
+    expect(toPublicPlan({ code: 'basic', selectable: true }).selectable).toBe(true);
+    expect(toPublicPlan({ code: 'basic' }).selectable).toBe(true);
   });
 });

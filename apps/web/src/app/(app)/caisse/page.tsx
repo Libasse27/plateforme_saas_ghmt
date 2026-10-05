@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
-import { closeSessionAction, createRegisterAction, openSessionAction } from '@/actions/cashier';
+import { createRegisterAction, openSessionAction } from '@/actions/cashier';
+import { CloseSessionForm } from '@/components/cashier/CloseSessionForm';
 import { SessionsTable } from '@/components/cashier/SessionsTable';
 import { ActionForm } from '@/components/forms/ActionForm';
 import { AccessDenied } from '@/components/ui/AccessDenied';
@@ -27,11 +28,12 @@ export default async function CashierPage() {
   const canValidate = canUse(me, 'cashier', 'cashier:cash_session:validate');
   const tz = me.tenant.timezone;
 
-  const [registersResult, mineResult, toValidateResult, sitesResult] = await Promise.all([
+  const [registersResult, mineResult, toValidateResult, sitesResult, openResult] = await Promise.all([
     settle(() => pageApi('/cashier/registers')),
     settle(() => pageApi('/cashier/sessions', { query: { mine: true, limit: SESSIONS_LIMIT } })),
     canValidate ? settle(() => pageApi('/cashier/sessions', { query: { status: 'closed', limit: TO_VALIDATE_LIMIT } })) : Promise.resolve(null),
     canValidate ? settle(() => pageApi('/org/sites')) : Promise.resolve(null),
+    canValidate ? settle(() => pageApi('/cashier/sessions', { query: { status: 'open', limit: TO_VALIDATE_LIMIT } })) : Promise.resolve(null),
   ]);
   if (!registersResult.ok) return <Alert tone="error">{registersResult.message}</Alert>;
 
@@ -40,6 +42,7 @@ export default async function CashierPage() {
   const mine = mineResult.ok ? items(mineResult.value.data, toCashSession) : [];
   const current = mine.find((session) => session.status === 'open');
   const toValidate = toValidateResult?.ok ? items(toValidateResult.value.data, toCashSession) : [];
+  const openSessions = openResult?.ok ? items(openResult.value.data, toCashSession) : [];
   const sites = sitesResult?.ok ? toList(sitesResult.value.data, toSite) : [];
 
   return (
@@ -57,18 +60,8 @@ export default async function CashierPage() {
               </dl>
               <p>Espèces attendues à cet instant : <strong>{formatMoney(current.expectedTotal, current.currency)}</strong></p>
               <h3 className="font-semibold">Clôturer la session</h3>
-              <p className="text-sm text-slate-800">Comptez les espèces : l&apos;écart avec le montant attendu sera affiché après la clôture.</p>
-              <ActionForm
-                action={closeSessionAction}
-                idPrefix="close-"
-                hidden={{ sessionId: current.id }}
-                fields={[
-                  { kind: 'text', name: 'countedAmount', label: `Montant compté (${current.currency})`, required: true, inputMode: 'decimal' },
-                  { kind: 'text', name: 'note', label: 'Note (facultative)' },
-                ]}
-                submitLabel="Clôturer la session"
-                pendingLabel="Clôture…"
-              />
+              <p className="text-sm text-slate-800">Comptez les espèces : l&apos;écart avec le montant attendu s&apos;affiche dès la saisie et exige une note s&apos;il n&apos;est pas nul.</p>
+              <CloseSessionForm sessionId={current.id} currency={current.currency} expectedTotal={current.expectedTotal} />
             </div>
           ) : canOpen ? (
             registers.length === 0 ? (
@@ -106,6 +99,18 @@ export default async function CashierPage() {
               <SessionsTable sessions={toValidate} registerNames={registerNames} timeZone={tz} caption="Sessions clôturées à valider" currentUserId={me.user.id} canValidate />
             ) : (
               <Alert tone="error">{toValidateResult?.ok === false ? toValidateResult.message : 'Chargement impossible.'}</Alert>
+            )}
+          </section>
+        ) : null}
+
+        {canValidate ? (
+          <section aria-labelledby="a-forcer">
+            <h2 id="a-forcer" className="mb-3 text-lg font-semibold">Sessions ouvertes (clôture forcée)</h2>
+            <p className="mb-3 text-sm text-slate-800">Un responsable peut clôturer de force la session d&apos;un autre utilisateur (oubli, départ) en indiquant le montant compté et un motif. L&apos;action est auditée.</p>
+            {openResult?.ok ? (
+              <SessionsTable sessions={openSessions} registerNames={registerNames} timeZone={tz} caption="Sessions ouvertes" currentUserId={me.user.id} canForceClose />
+            ) : (
+              <Alert tone="error">{openResult?.ok === false ? openResult.message : 'Chargement impossible.'}</Alert>
             )}
           </section>
         ) : null}

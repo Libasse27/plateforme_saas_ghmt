@@ -5,6 +5,7 @@ import { notFound, redirect } from 'next/navigation';
 import { sandboxSimulationSchema } from '@ghmt/shared';
 import { buildPaymentInput, toInvoicePayment, toOnlinePayment } from '@/lib/domain/billing';
 import { formatMoney } from '@/lib/domain/money';
+import { rec, str } from '@/lib/domain/raw';
 import { checkoutRedirectTarget } from '@/lib/domain/subscription';
 import { formDataToFlat, publicValues, safeNextPath, type FormState } from '@/lib/forms';
 import { actionApi, publicRequest } from '@/server/api';
@@ -67,6 +68,24 @@ export async function refreshPaymentAction(_prev: FormState, formData: FormData)
   if (payment.status === 'succeeded') return { ok: true, message: `Paiement confirmé (${formatMoney(payment.amount, payment.currency)}).` };
   if (payment.status === 'failed') return { ok: false, message: `Le paiement a échoué${payment.failureReason ? ` : ${payment.failureReason}` : ''}. Vous pouvez en lancer un nouveau.` };
   return { ok: true, message: 'Toujours en attente de confirmation par l\'opérateur.' };
+}
+
+/** Abandon d'un paiement en ligne en attente (R4) : l'API re-vérifie chez le fournisseur avant d'annuler. */
+export async function abandonPaymentAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const flat = formDataToFlat(formData);
+  const paymentId = pathId(flat.paymentId);
+  const invoiceId = pathId(flat.invoiceId);
+  if (!paymentId || !invoiceId) return INVALID_REQUEST;
+  let status: string;
+  try {
+    status = str(rec((await actionApi(`/billing/payments/${paymentId}/abandon`, { method: 'POST' })).data).status);
+  } catch (error) {
+    return failureState(error);
+  }
+  revalidatePath(`${INVOICES_PATH}/${invoiceId}`);
+  if (status === 'succeeded') return { ok: true, message: 'Le paiement a finalement été confirmé par l\'opérateur : il est enregistré et n\'a pas été annulé.' };
+  if (status === 'cancelled') return { ok: true, message: 'Paiement en ligne abandonné : le montant est de nouveau disponible pour un nouvel encaissement.' };
+  return { ok: false, message: 'Le paiement n\'a pas pu être abandonné. Actualisez la page puis réessayez.' };
 }
 
 const PROVIDER_REFERENCE = /^[A-Za-z0-9_-]{8,100}$/;

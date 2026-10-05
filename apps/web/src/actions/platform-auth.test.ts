@@ -92,6 +92,13 @@ describe('platformLoginAction', () => {
     expect(store.storePlatformSession).toHaveBeenCalledWith({ accessToken: 'a', refreshToken: 'p.refresh-token-1', expiresIn: 900 });
   });
 
+  it('compte sans MFA enrôlée : 403 mfa_enrollment_required_cli expliqué', async () => {
+    publicRequest.mockRejectedValue(new ApiError({ status: 403, code: 'mfa_enrollment_required_cli' }));
+    const state = await platformLoginAction({}, form({ email: 'root@ghmt.test', password: 'secret' }));
+    expect(state.ok).toBe(false);
+    expect(state.message).toBe('Ce compte doit d\'abord être activé par l\'équipe d\'exploitation (enrôlement du second facteur).');
+  });
+
   it('identifiants invalides : message neutre en français, e-mail conservé, mot de passe jamais renvoyé', async () => {
     publicRequest.mockRejectedValue(new ApiError({ status: 401, code: 'invalid_credentials' }));
     const state = await platformLoginAction({}, form({ email: 'root@ghmt.test', password: 'mauvais' }));
@@ -185,7 +192,11 @@ describe('enrôlement TOTP plateforme', () => {
     actionApi.mockResolvedValueOnce({ data: {} });
     expect((await startPlatformTotpSetupAction()).ok).toBe(false);
     actionApi.mockRejectedValueOnce(new ApiError({ status: 403, code: 'forbidden' }));
-    expect((await startPlatformTotpSetupAction()).message).toContain('autorisation');
+    expect((await startPlatformTotpSetupAction()).message).toContain('équipe d\'exploitation');
+    actionApi.mockRejectedValueOnce(new ApiError({ status: 404, code: 'not_found' }));
+    expect((await startPlatformTotpSetupAction()).message).toContain('équipe d\'exploitation');
+    actionApi.mockRejectedValueOnce(new ApiError({ status: 403, code: 'forbidden' }));
+    expect((await activatePlatformTotpAction({}, form({ code: '123456' }))).message).toContain('équipe d\'exploitation');
   });
 
   it('activate : remplace le jeton d\'accès et renvoie les codes de secours une fois', async () => {

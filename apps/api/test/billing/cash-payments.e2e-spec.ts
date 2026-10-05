@@ -51,7 +51,7 @@ describe('encaissements en espèces et autres modes (HTTP)', () => {
     await app?.close();
   });
 
-  const newInvoice = () => issuedInvoice(app, receptionist, a, patientId, catalog); // 8500.50
+  const newInvoice = () => issuedInvoice(app, receptionist, a, patientId, catalog); // 8500.00
 
   describe('espèces', () => {
     it('enregistre un paiement partiel puis le solde, et recalcule le statut de la facture', async () => {
@@ -59,33 +59,33 @@ describe('encaissements en espèces et autres modes (HTTP)', () => {
 
       const partial = await payCash(app, cashier, invoice.id, '3000.00', sessionId).expect(201);
       const afterPartial = await getInvoice(app, cashier, invoice.id);
-      const rest = await payCash(app, cashier, invoice.id, '5500.50', sessionId).expect(201);
+      const rest = await payCash(app, cashier, invoice.id, '5500.00', sessionId).expect(201);
       const afterFull = await getInvoice(app, cashier, invoice.id);
 
       expect(partial.body.data).toMatchObject({ method: 'cash', amount: '3000.00', status: 'succeeded', cashSessionId: sessionId, currency: 'XOF' });
-      expect(afterPartial).toMatchObject({ status: 'partially_paid', amountPaid: '3000.00', balance: '5500.50' });
+      expect(afterPartial).toMatchObject({ status: 'partially_paid', amountPaid: '3000.00', balance: '5500.00' });
       expect(rest.body.data.status).toBe('succeeded');
-      expect(afterFull).toMatchObject({ status: 'paid', amountPaid: '8500.50', balance: '0.00' });
+      expect(afterFull).toMatchObject({ status: 'paid', amountPaid: '8500.00', balance: '0.00' });
       expect(afterFull.payments).toHaveLength(2);
     });
 
     it('refuse un montant supérieur au reste dû (422) et un paiement sur une facture soldée (409)', async () => {
       const invoice = await newInvoice();
 
-      const tooMuch = await payCash(app, cashier, invoice.id, '8500.51', sessionId).expect(422);
-      await payCash(app, cashier, invoice.id, '8500.50', sessionId).expect(201);
+      const tooMuch = await payCash(app, cashier, invoice.id, '8501.00', sessionId).expect(422);
+      await payCash(app, cashier, invoice.id, '8500.00', sessionId).expect(201);
       const settled = await payCash(app, cashier, invoice.id, '0.01', sessionId).expect(409);
 
       expect(tooMuch.body.code).toBe('amount_exceeds_balance');
-      expect(tooMuch.body.balance ?? tooMuch.body.details?.balance).toBe('8500.50');
+      expect(tooMuch.body.balance ?? tooMuch.body.details?.balance).toBe('8500.00');
       expect(settled.body.code).toBe('invoice_not_payable');
     });
 
-    it('somme exactement les centimes (pas de dérive de flottant)', async () => {
+    it('somme exactement les montants (aucune dérive de flottant)', async () => {
       const invoice = await newInvoice();
-      for (const amount of ['0.10', '0.20', '0.30']) await payCash(app, cashier, invoice.id, amount, sessionId).expect(201);
+      for (const amount of ['100', '200', '300']) await payCash(app, cashier, invoice.id, amount, sessionId).expect(201);
 
-      expect((await getInvoice(app, cashier, invoice.id)).amountPaid).toBe('0.60');
+      expect((await getInvoice(app, cashier, invoice.id)).amountPaid).toBe('600.00');
     });
 
     it('refuse sur un brouillon et sur une facture annulée (409)', async () => {
@@ -95,7 +95,7 @@ describe('encaissements en espèces et autres modes (HTTP)', () => {
         .send({ patientId, siteId: a.mainSiteId, lines: [{ priceListItemId: catalog.drug.id }] })
         .expect(201);
       const voided = await newInvoice();
-      await http(app).post(`${BILLING}/invoices/${voided.id}/void`).set(bearer(accountant)).send({ reason: 'Annulation de test' }).expect(200);
+      await http(app).post(`${BILLING}/invoices/${voided.id}/void`).set(bearer(accountant)).send({ reasonCode: 'other', comment: 'Annulation de test' }).expect(200);
 
       await payCash(app, cashier, draftRes.body.data.id, '10.00', sessionId).expect(409);
       await payCash(app, cashier, voided.id, '10.00', sessionId).expect(409);
@@ -157,23 +157,23 @@ describe('encaissements en espèces et autres modes (HTTP)', () => {
       const invoice = await newInvoice();
       await payCash(app, cashier, invoice.id, '100.00', sessionId).expect(201);
 
-      const res = await http(app).post(`${BILLING}/invoices/${invoice.id}/void`).set(bearer(accountant)).send({ reason: 'Annulation tardive' }).expect(409);
+      const res = await http(app).post(`${BILLING}/invoices/${invoice.id}/void`).set(bearer(accountant)).send({ reasonCode: 'other', comment: 'Annulation tardive' }).expect(409);
 
       expect(res.body.code).toBe('invoice_has_payments');
     });
   });
 
   describe('autre mode (chèque, virement)', () => {
-    it('enregistre le paiement sans session de caisse avec sa référence', async () => {
+    it('enregistre le paiement rattaché à la session de caisse avec sa référence (R9)', async () => {
       const invoice = await newInvoice();
 
       const res = await http(app)
         .post(`${BILLING}/invoices/${invoice.id}/payments`)
         .set(bearer(cashier))
-        .send({ method: 'other', amount: '8500.50', reference: 'CHQ-0001' })
+        .send({ method: 'other', amount: '8500.00', cashSessionId: sessionId, reference: 'CHQ-0001' })
         .expect(201);
 
-      expect(res.body.data).toMatchObject({ method: 'other', status: 'succeeded', reference: 'CHQ-0001', cashSessionId: null });
+      expect(res.body.data).toMatchObject({ method: 'other', status: 'succeeded', reference: 'CHQ-0001', cashSessionId: sessionId });
       expect((await getInvoice(app, cashier, invoice.id)).status).toBe('paid');
     });
   });

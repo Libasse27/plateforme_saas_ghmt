@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPaymentInput,
+  buildVoidInput,
+  displayLabel,
+  patientDisplay,
+  receiptLabel,
   canIssue,
   canVoid,
   invoiceTotals,
@@ -42,7 +46,7 @@ describe('mappers de facturation', () => {
   });
   it('toInvoiceDetail avec lignes, paiements et patient', () => {
     const detail = toInvoiceDetail(DETAIL);
-    expect(detail.patient).toEqual({ id: 'pat-1', ipp: 'P26-0000001', fullName: 'Awa DIALLO' });
+    expect(detail.patient).toEqual({ id: 'pat-1', ipp: 'P26-0000001', fullName: 'Awa DIALLO', identityMasked: false });
     expect(detail.lines[0]).toMatchObject({ lineNo: 1, category: 'consultation', lineTotal: '30000.00' });
     expect(detail.payments[0]).toMatchObject({ method: 'mobile_money', status: 'pending', checkoutUrl: 'http://localhost:3001/sandbox/paiement/ref' });
     expect(toInvoiceDetail(undefined).lines).toEqual([]);
@@ -157,12 +161,91 @@ describe('buildPaymentInput', () => {
     expect(buildPaymentInput({ method: 'mobile_money', amount: '1000', payerPhone: '12' }, 'SN')).toMatchObject({ ok: false, fieldErrors: { payerPhone: expect.any(String) } });
   });
   it('autre mode : exige une référence', () => {
-    expect(buildPaymentInput({ method: 'other', amount: '1000', reference: ' CHQ-123 ' }, 'SN')).toEqual({ ok: true, body: { method: 'other', amount: '1000.00', reference: 'CHQ-123' } });
-    expect(buildPaymentInput({ method: 'other', amount: '1000' }, 'SN')).toMatchObject({ ok: false, fieldErrors: { reference: expect.any(String) } });
+    const SESSION = '8e2b8c1e-1a2b-4c3d-8e9f-0123456789ab';
+    expect(buildPaymentInput({ method: 'other', amount: '1000', reference: ' CHQ-123 ', cashSessionId: SESSION }, 'SN')).toEqual({ ok: true, body: { method: 'other', amount: '1000.00', reference: 'CHQ-123', cashSessionId: SESSION } });
+    expect(buildPaymentInput({ method: 'other', amount: '1000', cashSessionId: SESSION }, 'SN')).toMatchObject({ ok: false, fieldErrors: { reference: expect.any(String) } });
   });
   it('refuse un mode inconnu, un montant nul ou invalide', () => {
     expect(buildPaymentInput({ method: 'bitcoin', amount: '1000' }, 'SN')).toMatchObject({ ok: false, fieldErrors: { method: expect.any(String) } });
     expect(buildPaymentInput({ method: 'other', amount: '0', reference: 'x' }, 'SN')).toMatchObject({ ok: false, fieldErrors: { amount: expect.any(String) } });
     expect(buildPaymentInput({ method: 'other', amount: 'abc', reference: 'x' }, 'SN')).toMatchObject({ ok: false, fieldErrors: { amount: expect.any(String) } });
+  });
+});
+
+describe('R2 : lignes sensibles', () => {
+  const line = { description: 'Test VIH', category: 'examen' as const, isSensitive: true, labelMasked: false, printLabel: 'Examen biologique' };
+  it('affiche le libellé masqué quand labelMasked, sinon la description', () => {
+    expect(displayLabel({ ...line, labelMasked: true })).toBe('Examen biologique');
+    expect(displayLabel({ ...line, labelMasked: true, printLabel: null })).toBe('Examen');
+    expect(displayLabel(line)).toBe('Test VIH');
+  });
+  it('libellés neutres par catégorie', () => {
+    const neutral = (category: 'consultation' | 'acte' | 'examen' | 'medicament' | 'autre') => displayLabel({ description: 'x', category, labelMasked: true, printLabel: null });
+    expect([neutral('consultation'), neutral('acte'), neutral('examen'), neutral('medicament'), neutral('autre')]).toEqual(['Consultation', 'Acte médical', 'Examen', 'Médicament', 'Prestation']);
+  });
+  it('le reçu utilise exclusivement le libellé imprimable d\'une ligne sensible', () => {
+    expect(receiptLabel(line)).toBe('Examen biologique');
+    expect(receiptLabel({ ...line, printLabel: null })).toBe('Examen');
+    expect(receiptLabel({ ...line, isSensitive: false })).toBe('Test VIH');
+    expect(JSON.stringify(receiptLabel(line))).not.toContain('VIH');
+  });
+  it('mappe isSensitive, printLabel et labelMasked (lignes et grille)', () => {
+    const detail = toInvoiceDetail({ ...DETAIL, lines: [{ category: 'examen', description: 'Examen', isSensitive: true, printLabel: 'Bilan', labelMasked: true }] });
+    expect(detail.lines[0]).toMatchObject({ isSensitive: true, printLabel: 'Bilan', labelMasked: true });
+    expect(toPriceListItem({ isSensitive: true, printLabel: 'Bilan' })).toMatchObject({ isSensitive: true, printLabel: 'Bilan', labelMasked: false });
+    expect(toPriceListItem({}).printLabel).toBeNull();
+  });
+});
+
+describe('R3 : identité masquée', () => {
+  it('affiche « Patient {IPP} » sans nom', () => {
+    const detail = toInvoiceDetail({ ...DETAIL, patient: { id: 'pat-1', ipp: 'P26-0000001', fullName: 'Ne doit pas fuiter', identityMasked: true } });
+    expect(detail.patient.fullName).toBeNull();
+    expect(patientDisplay(detail.patient)).toBe('Patient P26-0000001');
+    expect(patientDisplay({ id: 'p', ipp: '', fullName: null, identityMasked: true })).toBe('Patient');
+    expect(patientDisplay({ id: 'p', ipp: 'P1', fullName: 'Awa DIALLO', identityMasked: false })).toBe('Awa DIALLO');
+  });
+});
+
+describe('R4 / R5 : paiements annulés et reçu annulé', () => {
+  it('conserve le statut cancelled et l\'anomalie, et autorise l\'annulation de la facture', () => {
+    expect(toInvoicePayment({ status: 'cancelled', anomaly: 'overpaid' })).toMatchObject({ status: 'cancelled', anomaly: 'overpaid' });
+    expect(canVoid({ status: 'issued', payments: [toInvoicePayment({ status: 'cancelled' }), toInvoicePayment({ status: 'failed' })] })).toBe(true);
+  });
+  it('reçu : voided vient du contrat ou du statut', () => {
+    expect(toReceipt({ invoice: DETAIL, voided: true }).voided).toBe(true);
+    expect(toReceipt({ invoice: { ...DETAIL, status: 'void' } }).voided).toBe(true);
+    expect(toReceipt({ invoice: DETAIL }).voided).toBe(false);
+  });
+});
+
+describe('R6 : annulation codifiée', () => {
+  it('exige un motif connu, commentaire facultatif de 300 caractères au plus', () => {
+    expect(buildVoidInput({ reasonCode: 'wrong_patient' })).toEqual({ ok: true, body: { reasonCode: 'wrong_patient' } });
+    expect(buildVoidInput({ reasonCode: 'other', comment: ' ok ' })).toEqual({ ok: true, body: { reasonCode: 'other', comment: 'ok' } });
+    expect(buildVoidInput({}).ok).toBe(false);
+    expect(buildVoidInput({ reasonCode: 'toString' }).ok).toBe(false);
+    expect(buildVoidInput({ reasonCode: 'other', comment: 'x'.repeat(300) }).ok).toBe(true);
+    expect(buildVoidInput({ reasonCode: 'other', comment: 'x'.repeat(301) }).ok).toBe(false);
+  });
+});
+
+describe('R7 : FCFA', () => {
+  it('totaux d\'aperçu arrondis à l\'unité', () => {
+    expect(invoiceTotals([{ unitPrice: '1001.00', quantity: '0.5' }], 'XOF')).toBe('501.00');
+  });
+  it('lignes libres : prix décimal refusé en XOF, accepté en EUR', () => {
+    const lines = JSON.stringify([{ kind: 'free', description: 'Pansement', category: 'acte', unitPrice: '1,5', quantity: '1' }]);
+    expect(parseDraftLines(lines, true, 'XOF').ok).toBe(false);
+    expect(parseDraftLines(lines, true, 'EUR').ok).toBe(true);
+  });
+});
+
+describe('R6/R8 : lectures du contrat', () => {
+  it('voidReasonCode connu seulement, forceClosed booléen', () => {
+    expect(toInvoiceDetail({ ...DETAIL, voidReasonCode: 'duplicate', voidReason: 'saisi deux fois' })).toMatchObject({ voidReasonCode: 'duplicate', voidReason: 'saisi deux fois' });
+    expect(toInvoiceDetail({ ...DETAIL, voidReasonCode: 'inconnu' }).voidReasonCode).toBeNull();
+    expect(toCashSession({ forceClosed: true }).forceClosed).toBe(true);
+    expect(toCashSession({}).forceClosed).toBe(false);
   });
 });

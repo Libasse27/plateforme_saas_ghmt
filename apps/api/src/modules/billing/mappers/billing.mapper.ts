@@ -9,7 +9,9 @@ import type {
   ItemCategory,
   PriceListItemView,
   PriceListView,
+  VoidReasonCode,
 } from '@ghmt/shared';
+import { NEUTRAL_CATEGORY_LABELS } from '@ghmt/shared';
 import { formatMoney, zeroMoney } from '../../../common/money/money';
 import type {
   CashRegister,
@@ -32,6 +34,14 @@ export interface InvoicePatientRef {
   readonly lastName: string;
 }
 
+/** Ce que le lecteur a le droit de voir d'une facture (docs/09 §R2-R3). */
+export interface InvoiceViewPolicy {
+  /** `consultations:consultation:read` : libellé réel des prestations sensibles (jamais sur le reçu). */
+  readonly clinicalLabels: boolean;
+  /** `patients:patient:read` : nom du patient. */
+  readonly patientIdentity: boolean;
+}
+
 export const toPriceListView = (row: PriceList): PriceListView => ({
   id: row.id,
   code: row.code,
@@ -49,18 +59,30 @@ export const toPriceListItemView = (row: PriceListItem): PriceListItemView => ({
   category: row.category as ItemCategory,
   unitPrice: formatMoney(row.unitPrice),
   isActive: row.isActive,
+  isSensitive: row.isSensitive,
+  printLabel: row.printLabel,
 });
 
-export const toInvoiceLineView = (row: PatientInvoiceLine): InvoiceLineView => ({
-  id: row.id,
-  lineNo: row.lineNo,
-  priceListItemId: row.priceListItemId,
-  category: row.category as ItemCategory,
-  description: row.description,
-  quantity: row.quantity.toString(),
+/** Libellé d'une ligne sensible hors clinique : libellé d'impression, à défaut libellé neutre de la catégorie. */
+function maskedLabel(row: PatientInvoiceLine): string {
+  return row.printLabel ?? NEUTRAL_CATEGORY_LABELS[row.category as ItemCategory] ?? NEUTRAL_CATEGORY_LABELS.autre;
+}
+
+export const toInvoiceLineView = (row: PatientInvoiceLine, clinicalLabels: boolean): InvoiceLineView => {
+  const masked = row.isSensitive && !clinicalLabels;
+  return {
+    id: row.id,
+    lineNo: row.lineNo,
+    priceListItemId: row.priceListItemId,
+    category: row.category as ItemCategory,
+    description: masked ? maskedLabel(row) : row.description,
+    isSensitive: row.isSensitive,
+    labelMasked: masked,
+    quantity: row.quantity.toString(),
   unitPrice: formatMoney(row.unitPrice),
   lineTotal: formatMoney(row.lineTotal),
-});
+  };
+};
 
 export const toPaymentView = (row: PatientPayment): InvoicePaymentView => ({
   id: row.id,
@@ -74,6 +96,7 @@ export const toPaymentView = (row: PatientPayment): InvoicePaymentView => ({
   provider: row.provider,
   checkoutUrl: row.checkoutUrl,
   failureReason: row.failureReason,
+  anomaly: row.anomaly,
   createdAt: row.createdAt.toISOString(),
 });
 
@@ -96,16 +119,20 @@ export function toInvoiceSummary(row: PatientInvoice): InvoiceSummaryView {
   };
 }
 
-export function toInvoiceDetail(row: InvoiceDetailRow, patient: InvoicePatientRef): InvoiceDetailView {
+export function toInvoiceDetail(row: InvoiceDetailRow, patient: InvoicePatientRef, policy: InvoiceViewPolicy): InvoiceDetailView {
   return {
     ...toInvoiceSummary(row),
     subtotal: formatMoney(row.subtotal),
     notes: row.notes,
     voidedAt: row.voidedAt?.toISOString() ?? null,
-    voidReason: row.voidReason,
-    // Identité administrative seulement : aucune donnée de contact sur une facture.
-    patient: { id: patient.id, ipp: patient.ipp, fullName: formatPatientFullName(patient.firstName, patient.lastName) },
-    lines: [...row.lines].sort((a, b) => a.lineNo - b.lineNo).map(toInvoiceLineView),
+    voidReasonCode: (row.voidReasonCode as VoidReasonCode | null) ?? null,
+    // Sans commentaire, la colonne reprend le code du motif : seul un vrai commentaire est exposé.
+    voidReason: row.voidReason !== null && row.voidReason !== row.voidReasonCode ? row.voidReason : null,
+    // Identité administrative seulement (aucun contact) ; masquée sans `patients:patient:read`.
+    patient: policy.patientIdentity
+      ? { id: patient.id, ipp: patient.ipp, fullName: formatPatientFullName(patient.firstName, patient.lastName), identityMasked: false }
+      : { id: patient.id, ipp: patient.ipp, fullName: null, identityMasked: true },
+    lines: [...row.lines].sort((a, b) => a.lineNo - b.lineNo).map((line) => toInvoiceLineView(line, policy.clinicalLabels)),
     payments: [...row.payments].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()).map(toPaymentView),
   };
 }
@@ -134,6 +161,7 @@ export function toCashSessionView(row: CashSession, liveExpectedTotal: string): 
     closedAt: row.closedAt?.toISOString() ?? null,
     closingCounted: row.closingCounted ? formatMoney(row.closingCounted) : null,
     variance: row.variance ? formatMoney(row.variance) : null,
+    forceClosed: row.forceClosed,
     validatedBy: row.validatedBy,
     validatedAt: row.validatedAt?.toISOString() ?? null,
   };

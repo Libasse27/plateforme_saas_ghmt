@@ -3,7 +3,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { TotpService } from '../auth/services/totp.service';
 import { PlatformAuthGuard } from './auth/platform-auth.guard';
 import { PlatformLoginService } from './auth/platform-login.service';
-import { PlatformMfaService } from './auth/platform-mfa.service';
+import { PlatformPasswordService } from './auth/platform-password.service';
 import { PlatformRefreshService } from './auth/platform-refresh.service';
 import { PlatformSessionsService } from './auth/platform-sessions.service';
 import { PlatformTokenService } from './auth/platform-token.service';
@@ -40,7 +40,7 @@ import { PlatformTenantsService } from './services/platform-tenants.service';
     PlatformTokenService,
     PlatformSessionsService,
     PlatformLoginService,
-    PlatformMfaService,
+    PlatformPasswordService,
     PlatformRefreshService,
     PlatformAuthGuard,
     PlatformTenantsService,

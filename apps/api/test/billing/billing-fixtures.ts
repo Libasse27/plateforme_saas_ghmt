@@ -39,13 +39,13 @@ export async function seedCatalog(app: INestApplication, tenant: TenantFixture):
       });
     const [consultation, exam, drug] = await Promise.all([
       item('CONS', 'Consultation générale', 'consultation', '5000.00'),
-      item('NFS', 'Numération formule sanguine', 'examen', '3500.50'),
+      item('NFS', 'Numération formule sanguine', 'examen', '3500.00'),
       item('PARA', 'Paracétamol 500 mg', 'medicament', '150.00'),
     ]);
     return {
       priceListId: list.id,
       consultation: { id: consultation.id, price: '5000.00' },
-      exam: { id: exam.id, price: '3500.50' },
+      exam: { id: exam.id, price: '3500.00' },
       drug: { id: drug.id, price: '150.00' },
     };
   });
@@ -67,7 +67,7 @@ export interface InvoiceBody {
   readonly [key: string]: unknown;
 }
 
-/** Brouillon de facture (consultation + examen = 8500.50). */
+/** Brouillon de facture (consultation + examen = 8500.00). */
 export async function draftInvoice(
   app: INestApplication,
   user: UserFixture,

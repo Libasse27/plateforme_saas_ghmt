@@ -58,8 +58,8 @@ describe('factures patient (HTTP)', () => {
         { priceListItemId: catalogA.drug.id, quantity: '3' },
       ]);
 
-      expect(invoice).toMatchObject({ status: 'draft', number: null, currency: 'XOF', subtotal: '12451.00', total: '12451.00', amountPaid: '0.00', balance: '12451.00' });
-      expect(invoice.lines.map((l) => l.lineTotal)).toEqual(['5000.00', '7001.00', '450.00']);
+      expect(invoice).toMatchObject({ status: 'draft', number: null, currency: 'XOF', subtotal: '12450.00', total: '12450.00', amountPaid: '0.00', balance: '12450.00' });
+      expect(invoice.lines.map((l) => l.lineTotal)).toEqual(['5000.00', '7000.00', '450.00']);
       expect(invoice.lines[0]).toMatchObject({ lineNo: 1, description: 'Consultation générale', category: 'consultation', unitPrice: '5000.00', quantity: '1' });
       expect(invoice).toMatchObject({ patientId, siteId: a.mainSiteId, patient: { id: patientId } });
     });
@@ -158,7 +158,7 @@ describe('factures patient (HTTP)', () => {
       const [entry] = await auditActions(app, a, 'invoice.created', invoice.id);
 
       expect(entry).toMatchObject({ resourceType: 'invoice', patientId, actorUserId: receptionist.userId });
-      expect(entry?.changes).toMatchObject({ total: '8500.50', lineCount: 2, currency: 'XOF' });
+      expect(entry?.changes).toMatchObject({ total: '8500.00', lineCount: 2, currency: 'XOF' });
     });
   });
 
@@ -207,7 +207,7 @@ describe('factures patient (HTTP)', () => {
       expect(issued.number).toMatch(/^FAC-\d{4}-\d{6}$/);
       expect(issued.issuedAt).not.toBeNull();
       const [entry] = await auditActions(app, a, 'invoice.issued', draft.id);
-      expect(entry?.changes).toMatchObject({ number: issued.number, total: '8500.50' });
+      expect(entry?.changes).toMatchObject({ number: issued.number, total: '8500.00' });
     });
 
     it('refuse une seconde émission (409) sans consommer de numéro', async () => {
@@ -246,7 +246,7 @@ describe('factures patient (HTTP)', () => {
       await expect(tenantDb.runAs(a.tenantId, (tx) => tx.$executeRaw`UPDATE tenant.invoice_lines SET unit_price = 1, line_total = 1 WHERE invoice_id = ${issued.id}::uuid`)).rejects.toThrow();
       await expect(tenantDb.runAs(a.tenantId, (tx) => tx.$executeRaw`DELETE FROM tenant.invoice_lines WHERE invoice_id = ${issued.id}::uuid`)).rejects.toThrow();
       await expect(tenantDb.runAs(a.tenantId, (tx) => tx.$executeRaw`DELETE FROM tenant.invoices WHERE id = ${issued.id}::uuid`)).rejects.toThrow();
-      expect((await getInvoice(app, receptionist, issued.id)).total).toBe('8500.50');
+      expect((await getInvoice(app, receptionist, issued.id)).total).toBe('8500.00');
     });
   });
 
@@ -254,18 +254,19 @@ describe('factures patient (HTTP)', () => {
     it('annule une facture émise sans paiement avec un motif, conserve le numéro et audite', async () => {
       const issued = await issueInvoice(app, receptionist, (await draftInvoice(app, receptionist, a, patientId, catalogA)).id);
 
-      const res = await http(app).post(`${BILLING}/invoices/${issued.id}/void`).set(bearer(accountant)).send({ reason: 'Erreur de saisie du patient' }).expect(200);
+      const res = await http(app).post(`${BILLING}/invoices/${issued.id}/void`).set(bearer(accountant)).send({ reasonCode: 'other', comment: 'Erreur de saisie du patient' }).expect(200);
 
-      expect(res.body.data).toMatchObject({ status: 'void', number: issued.number, voidReason: 'Erreur de saisie du patient' });
+      expect(res.body.data).toMatchObject({ status: 'void', number: issued.number, voidReasonCode: 'other', voidReason: 'Erreur de saisie du patient' });
       expect(res.body.data.voidedAt).not.toBeNull();
       const [entry] = await auditActions(app, a, 'invoice.voided', issued.id);
-      expect(entry?.changes).toMatchObject({ number: issued.number, reason: 'Erreur de saisie du patient' });
+      expect(entry?.changes).toEqual(expect.objectContaining({ number: issued.number, reasonCode: 'other' }));
+      expect(JSON.stringify(entry?.changes)).not.toContain('Erreur de saisie');
     });
 
     it('annule un brouillon (sans numéro) et refuse ensuite toute émission', async () => {
       const draft = await draftInvoice(app, receptionist, a, patientId, catalogA);
 
-      await http(app).post(`${BILLING}/invoices/${draft.id}/void`).set(bearer(accountant)).send({ reason: 'Brouillon abandonné' }).expect(200);
+      await http(app).post(`${BILLING}/invoices/${draft.id}/void`).set(bearer(accountant)).send({ reasonCode: 'other', comment: 'Brouillon abandonné' }).expect(200);
 
       const res = await http(app).post(`${BILLING}/invoices/${draft.id}/issue`).set(bearer(receptionist)).expect(409);
       expect(res.body.code).toBe('invoice_not_draft');
@@ -275,9 +276,9 @@ describe('factures patient (HTTP)', () => {
       const issued = await issueInvoice(app, receptionist, (await draftInvoice(app, receptionist, a, patientId, catalogA)).id);
 
       await http(app).post(`${BILLING}/invoices/${issued.id}/void`).set(bearer(accountant)).send({}).expect(422);
-      await http(app).post(`${BILLING}/invoices/${issued.id}/void`).set(bearer(receptionist)).send({ reason: 'Je ne peux pas' }).expect(403);
-      await http(app).post(`${BILLING}/invoices/${issued.id}/void`).set(bearer(accountant)).send({ reason: 'Premier motif' }).expect(200);
-      const twice = await http(app).post(`${BILLING}/invoices/${issued.id}/void`).set(bearer(accountant)).send({ reason: 'Second motif' }).expect(409);
+      await http(app).post(`${BILLING}/invoices/${issued.id}/void`).set(bearer(receptionist)).send({ reasonCode: 'other', comment: 'Je ne peux pas' }).expect(403);
+      await http(app).post(`${BILLING}/invoices/${issued.id}/void`).set(bearer(accountant)).send({ reasonCode: 'other', comment: 'Premier motif' }).expect(200);
+      const twice = await http(app).post(`${BILLING}/invoices/${issued.id}/void`).set(bearer(accountant)).send({ reasonCode: 'other', comment: 'Second motif' }).expect(409);
       expect(twice.body.code).toBe('invoice_already_void');
     });
 
@@ -285,7 +286,7 @@ describe('factures patient (HTTP)', () => {
       const issued = await issueInvoice(app, receptionist, (await draftInvoice(app, receptionist, a, patientId, catalogA)).id);
       const foreignAccountant = await createUserWithRole(app, b, 'accountant');
 
-      await http(app).post(`${BILLING}/invoices/${issued.id}/void`).set(bearer(foreignAccountant)).send({ reason: 'Tentative' }).expect(404);
+      await http(app).post(`${BILLING}/invoices/${issued.id}/void`).set(bearer(foreignAccountant)).send({ reasonCode: 'other', comment: 'Tentative' }).expect(404);
     });
   });
 
@@ -306,7 +307,7 @@ describe('factures patient (HTTP)', () => {
 
       const detail = await getInvoice(app, cashier, issued.id);
 
-      expect(Object.keys(detail['patient'] as object).sort()).toEqual(['fullName', 'id', 'ipp']);
+      expect(Object.keys(detail['patient'] as object).sort()).toEqual(['fullName', 'id', 'identityMasked', 'ipp']);
     });
 
     it('404 pour une facture inconnue, mal formée ou d’un autre établissement', async () => {

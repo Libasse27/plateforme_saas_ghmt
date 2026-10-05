@@ -41,8 +41,10 @@ model PaymentEvent {
   providerEventId   String    @map("provider_event_id")
   providerReference String?   @map("provider_reference")
   attemptId         String?   @map("attempt_id") @db.Uuid
-  /// Corps brut du webhook, conservé pour l'audit et le rejeu (rétention 1 an).
+  /// Corps du webhook EXPURGÉ (téléphone et identifiants personnels du payeur retirés), conservé pour l'audit.
   rawBody           String    @map("raw_body")
+  /// Empreinte SHA-256 (hex) du corps brut reçu : anti-rejeu sans conserver les données personnelles.
+  bodySha256        String?   @map("body_sha256")
   receivedAt        DateTime  @default(now()) @map("received_at") @db.Timestamptz(6)
   processedAt       DateTime? @map("processed_at") @db.Timestamptz(6)
   outcome           String?
@@ -97,6 +99,9 @@ model PriceListItem {
   category    String // consultation | acte | examen | medicament | autre
   unitPrice   Decimal  @map("unit_price") @db.Decimal(18, 2)
   isActive    Boolean  @default(true) @map("is_active")
+  /// Prestation révélant un diagnostic : libellé masqué hors clinique et sur le reçu.
+  isSensitive Boolean  @default(false) @map("is_sensitive")
+  printLabel  String?  @map("print_label")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -129,6 +134,8 @@ model PatientInvoice {
   voidedAt      DateTime? @map("voided_at") @db.Timestamptz(6)
   voidedBy      String?   @map("voided_by") @db.Uuid
   voidReason    String?   @map("void_reason")
+  /// Motif codé de l'annulation (seul élément porté par l'audit).
+  voidReasonCode String?  @map("void_reason_code")
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   createdBy     String?   @map("created_by") @db.Uuid
@@ -157,6 +164,9 @@ model PatientInvoiceLine {
   quantity        Decimal @db.Decimal(18, 3)
   unitPrice       Decimal @map("unit_price") @db.Decimal(18, 2)
   lineTotal       Decimal @map("line_total") @db.Decimal(18, 2)
+  /// Copiés de la grille à la création : le libellé affiché dépend du lecteur (docs/09 §R2).
+  isSensitive     Boolean @default(false) @map("is_sensitive")
+  printLabel      String? @map("print_label")
 
   invoice PatientInvoice @relation(fields: [tenantId, invoiceId], references: [tenantId, id])
 
@@ -175,7 +185,7 @@ model PatientPayment {
   method            String // cash | mobile_money | card | other
   amount            Decimal   @db.Decimal(18, 2)
   currency          String    @db.Char(3)
-  status            String // pending | succeeded | failed
+  status            String // pending | succeeded | failed | cancelled
   paidAt            DateTime? @map("paid_at") @db.Timestamptz(6)
   cashSessionId     String?   @map("cash_session_id") @db.Uuid // FK composite optionnelle en SQL
   receivedBy        String?   @map("received_by") @db.Uuid
@@ -186,6 +196,8 @@ model PatientPayment {
   checkoutUrl       String?   @map("checkout_url")
   reference         String?
   failureReason     String?   @map("failure_reason")
+  /// `overpaid` : succès fournisseur au-delà du reste dû (remboursement hors périmètre).
+  anomaly           String?
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -234,6 +246,8 @@ model CashSession {
   closingCounted Decimal?  @map("closing_counted") @db.Decimal(18, 2)
   variance       Decimal?  @db.Decimal(18, 2)
   closingNote    String?   @map("closing_note")
+  /// Clôture contradictoire par un tiers habilité (docs/09 §R8).
+  forceClosed    Boolean   @default(false) @map("force_closed")
   validatedBy    String?   @map("validated_by") @db.Uuid
   validatedAt    DateTime? @map("validated_at") @db.Timestamptz(6)
   validationNote String?   @map("validation_note")

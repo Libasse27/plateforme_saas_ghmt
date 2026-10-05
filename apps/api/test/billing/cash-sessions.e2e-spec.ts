@@ -137,20 +137,20 @@ describe('caisse : caisses et sessions (HTTP)', () => {
   describe('clôture', () => {
     it('calcule attendu (fond + espèces) et écart (compté − attendu), fige les valeurs et audite', async () => {
       const session = await openSessionOk(app, cashier, await createRegisterRow(app, a), '10000.00');
-      const invoice = await issuedInvoice(app, receptionistOf(), a, patientId, catalog); // 8500.50
-      await payCash(app, cashier, invoice.id, '8500.50', session.id).expect(201);
+      const invoice = await issuedInvoice(app, receptionistOf(), a, patientId, catalog); // 8500.00
+      await payCash(app, cashier, invoice.id, '8500.00', session.id).expect(201);
       // Un paiement « autre mode » ne passe pas par la caisse physique.
       const other = await issuedInvoice(app, receptionistOf(), a, patientId, catalog);
-      await http(app).post(`${BILLING}/invoices/${other.id}/payments`).set(bearer(cashier)).send({ method: 'other', amount: '100.00', reference: 'CHQ-1' }).expect(201);
+      await http(app).post(`${BILLING}/invoices/${other.id}/payments`).set(bearer(cashier)).send({ method: 'other', amount: '100.00', cashSessionId: session.id, reference: 'CHQ-1' }).expect(201);
 
       const live = await http(app).get(`${CASHIER}/sessions/${session.id}`).set(bearer(cashier)).expect(200);
       const closed = await closeSession(cashier, session.id, '18000.00', { note: 'Billet de 500 manquant' }).expect(200);
 
-      expect(live.body.data.expectedTotal).toBe('18500.50');
-      expect(closed.body.data).toMatchObject({ status: 'closed', expectedTotal: '18500.50', closingCounted: '18000.00', variance: '-500.50', closedBy: cashier.userId });
+      expect(live.body.data.expectedTotal).toBe('18500.00');
+      expect(closed.body.data).toMatchObject({ status: 'closed', expectedTotal: '18500.00', closingCounted: '18000.00', variance: '-500.00', closedBy: cashier.userId });
       expect(closed.body.data.closedAt).not.toBeNull();
       const [entry] = await auditActions(app, a, 'cash_session.closed', session.id);
-      expect(entry?.changes).toMatchObject({ expectedTotal: '18500.50', countedAmount: '18000.00', variance: '-500.50' });
+      expect(entry?.changes).toMatchObject({ expectedTotal: '18500.00', countedAmount: '18000.00', variance: '-500.00' });
     });
 
     it('seul l’ouvreur clôture (403), une seule fois (409), 404 si inconnue ou étrangère', async () => {

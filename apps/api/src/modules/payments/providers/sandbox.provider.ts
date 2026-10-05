@@ -75,6 +75,11 @@ export class SandboxProvider implements PaymentProvider {
     return event ? { valid: true, eventId: event.eventId, providerReference: event.providerReference } : { valid: false };
   }
 
+  /** Le corps sandbox ne porte que des identifiants et un statut : conservé tel quel. */
+  redactWebhookBody(rawBody: Buffer): string {
+    return rawBody.toString('utf8');
+  }
+
   /** Signature d'un corps de webhook (utilisée par le simulateur pour émettre ses propres notifications). */
   sign(rawBody: Buffer): string {
     return hmacSha256Hex(this.secret, rawBody);

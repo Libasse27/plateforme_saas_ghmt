@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { z } from 'zod';
 
 const KEY_BYTES = 32;
@@ -38,6 +39,8 @@ export const envSchema = z.object({
   /** Rôle ghmt_platform : schéma platform uniquement (console Super Administrateur, abonnements, paiements). */
   PLATFORM_DATABASE_URL: z.string().startsWith('postgresql://'),
   JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET doit contenir au moins 32 caractères'),
+  /** Secret des JWT du realm plateforme (≥ 32 caractères, distinct de JWT_ACCESS_SECRET et obligatoire en production). */
+  JWT_PLATFORM_SECRET: optionalString.pipe(z.string().min(32, 'JWT_PLATFORM_SECRET doit contenir au moins 32 caractères').optional()),
   JWT_ISSUER: z.string().min(1),
   JWT_AUDIENCE: z.string().min(1),
   DATA_ENCRYPTION_KEY: base64Key,
@@ -56,8 +59,8 @@ export const envSchema = z.object({
   SMTP_HOST: z.string().min(1).default('localhost'),
   SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(1025),
   MAIL_FROM: z.string().min(3).default('GHMT <no-reply@ghmt.local>'),
-  /** Fournisseur de paiement simulé (dev/tests) : actif par défaut hors production, interdit en production. */
-  PAYMENTS_SANDBOX_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+  /** Fournisseur de paiement simulé (dev/tests) : INACTIF par défaut, à activer explicitement ; interdit en production. */
+  PAYMENTS_SANDBOX_ENABLED: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
   PAYMENTS_ROUTES: paymentRoutes,
   /** CinetPay : l'adaptateur n'est actif que si clé API, identifiant de site, clé secrète et URL de notification sont fournis. */
   CINETPAY_API_KEY: optionalString,
@@ -70,7 +73,13 @@ export const envSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 });
 
-export type Env = Readonly<z.infer<typeof envSchema>>;
+type ParsedEnv = z.infer<typeof envSchema>;
+export type Env = Readonly<Omit<ParsedEnv, 'JWT_PLATFORM_SECRET'> & { JWT_PLATFORM_SECRET: string }>;
+
+/** Hors production, un secret plateforme absent est dérivé du secret tenant (jamais identique) pour ne pas bloquer le développement. */
+function derivePlatformSecret(accessSecret: string): string {
+  return createHmac('sha256', accessSecret).update('ghmt:jwt:platform-realm').digest('base64url');
+}
 
 /** Jeton d'injection de la configuration validée. */
 export const ENV = Symbol('ENV');
@@ -87,12 +96,19 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     const issues = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
     throw new Error(`Configuration invalide : ${issues}`);
   }
+  const production = source['NODE_ENV'] === 'production';
+  const configured = result.data.JWT_PLATFORM_SECRET;
+  if (production && !configured) throw new Error('Configuration invalide : JWT_PLATFORM_SECRET doit être défini en production.');
+  if (production && configured === result.data.JWT_ACCESS_SECRET) {
+    throw new Error('Configuration invalide : JWT_PLATFORM_SECRET doit être distinct de JWT_ACCESS_SECRET.');
+  }
+  const base = { ...result.data, JWT_PLATFORM_SECRET: configured ?? derivePlatformSecret(result.data.JWT_ACCESS_SECRET) };
   // Le simulateur de paiement ne doit jamais exister en production, même par erreur de configuration.
-  if (source['NODE_ENV'] === 'production') {
+  if (production) {
     if (source['PAYMENTS_SANDBOX_ENABLED'] === 'true') {
       throw new Error('Configuration invalide : PAYMENTS_SANDBOX_ENABLED ne peut pas être activé en production.');
     }
-    return Object.freeze({ ...result.data, PAYMENTS_SANDBOX_ENABLED: false });
+    return Object.freeze({ ...base, PAYMENTS_SANDBOX_ENABLED: false });
   }
-  return Object.freeze(result.data);
+  return Object.freeze(base);
 }

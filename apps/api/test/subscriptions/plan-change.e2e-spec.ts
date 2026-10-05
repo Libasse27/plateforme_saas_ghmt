@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PlatformDb } from '../../src/infrastructure/prisma/platform-db.service';
 import { SubscriptionLifecycleService } from '../../src/modules/subscriptions/services/subscription-lifecycle.service';
 import { createTenantFixture, createUserWithRole, type TenantFixture } from '../helpers/fixtures';
-import { bearer, http } from '../helpers/platform';
+import { bearer, http, platformClientIp } from '../helpers/platform';
 import { createTestApp } from '../helpers/test-app';
 import { MS_PER_DAY, SUBSCRIPTION, createDoubles, invoicesOf, makeActive, publishPaymentSucceeded, readSubscription, tenantStatusOf } from './subscription-fixtures';
 
@@ -12,7 +12,7 @@ describe('subscriptions : changement de plan (POST /subscription/change)', () =>
   let app: INestApplication;
 
   const change = (tenant: Pick<TenantFixture, 'adminToken'>, body: Record<string, unknown>) =>
-    http(app).post(`${SUBSCRIPTION}/change`).set(bearer(tenant.adminToken)).send(body);
+    http(app).post(`${SUBSCRIPTION}/change`).set('X-Forwarded-For', platformClientIp()).set(bearer(tenant.adminToken)).send(body);
   const planOf = async (tenantId: string): Promise<string> => {
     const sub = await readSubscription(app, tenantId);
     return (await app.get(PlatformDb).run((tx) => tx.plan.findUniqueOrThrow({ where: { id: sub.planId } }))).code;
@@ -37,14 +37,13 @@ describe('subscriptions : changement de plan (POST /subscription/change)', () =>
   });
 
   describe('montée en gamme', () => {
-    it('applique le plan immédiatement avec une facture de prorata (TVA du pays) et relève droits et modules', async () => {
+    it('émet une facture de prorata (TVA du pays) et applique le plan, droits et modules au règlement', async () => {
       const tenant = await activeTenant('chg-up', 'basic');
 
       const res = await change(tenant, { planCode: 'standard', billingPeriod: 'monthly' }).expect(200);
 
-      expect(res.body.data.effect).toBe('immediate');
-      expect(res.body.data.subscription).toMatchObject({ plan: { code: 'standard' }, status: 'active', pendingChange: null });
-      expect(res.body.data.subscription.entitlements.limits.users).toBe(25);
+      expect(res.body.data.effect).toBe('pending_payment');
+      expect(res.body.data.subscription).toMatchObject({ plan: { code: 'basic' }, status: 'active', pendingChange: { planCode: 'standard' } });
       const invoice = res.body.data.invoice;
       expect(invoice).toMatchObject({ kind: 'upgrade_prorata', status: 'open', taxRate: '0.1800' });
       // (75 000 − 25 000) × ~15/30 = ~25 000 ; TVA 18 % ; total = sous-total + taxe, calculé sans flottant.
@@ -52,6 +51,8 @@ describe('subscriptions : changement de plan (POST /subscription/change)', () =>
       expect(Number(invoice.subtotal)).toBeLessThan(25_100);
       expect(Math.round(Number(invoice.total) * 100)).toBe(Math.round(Number(invoice.subtotal) * 100) + Math.round(Number(invoice.taxAmount) * 100));
       expect(invoice.lines[0].description).toContain('Basic → Standard');
+      expect(await planOf(tenant.tenantId)).toBe('basic');
+      await publishPaymentSucceeded(app, tenant, invoice);
       expect(await planOf(tenant.tenantId)).toBe('standard');
       expect(await enabledModules(tenant.tenantId)).toEqual(expect.arrayContaining(['laboratory', 'pharmacy', 'billing', 'cashier']));
     });
@@ -64,15 +65,16 @@ describe('subscriptions : changement de plan (POST /subscription/change)', () =>
       await publishPaymentSucceeded(app, tenant, res.body.data.invoice);
 
       const after = await readSubscription(app, tenant.tenantId);
+      expect(await planOf(tenant.tenantId)).toBe('professional');
       expect(after.currentPeriodEnd.toISOString()).toBe(before.currentPeriodEnd.toISOString());
       expect((await invoicesOf(app, tenant)).find((i) => i.kind === 'upgrade_prorata')?.status).toBe('paid');
     });
 
     it('en essai : le plan change tout de suite et la facture de conversion est émise', async () => {
       const tenant = await createTenantFixture(app, { prefix: 'chg-trial', subscriptionPlan: 'trial' });
-      const res = await change(tenant, { planCode: 'professional', billingPeriod: 'yearly' }).expect(200);
-      expect(res.body.data).toMatchObject({ effect: 'immediate', invoice: { kind: 'conversion', subtotal: '2000000.00' } });
-      expect(await planOf(tenant.tenantId)).toBe('professional');
+      const res = await change(tenant, { planCode: 'standard', billingPeriod: 'yearly' }).expect(200);
+      expect(res.body.data).toMatchObject({ effect: 'immediate', invoice: { kind: 'conversion' } });
+      expect(await planOf(tenant.tenantId)).toBe('standard');
     });
   });
 
@@ -178,8 +180,8 @@ describe('subscriptions : changement de plan (POST /subscription/change)', () =>
       const mine = await activeTenant('chg-iso-a', 'standard');
       const other = await activeTenant('chg-iso-b', 'standard');
       await change(mine, { planCode: 'professional', billingPeriod: 'monthly', tenantId: other.tenantId }).expect(200);
-      expect(await planOf(other.tenantId)).toBe('standard');
-      expect(await planOf(mine.tenantId)).toBe('professional');
+      expect((await readSubscription(app, other.tenantId)).pendingPlanId).toBeNull();
+      expect((await readSubscription(app, mine.tenantId)).pendingPlanId).not.toBeNull();
     });
   });
 });

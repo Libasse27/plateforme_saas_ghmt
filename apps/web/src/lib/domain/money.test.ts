@@ -9,8 +9,11 @@ describe('formatMoney', () => {
     expect(formatMoney('1250000', 'XAF')).toBe(`1${NBSP}250${NBSP}000${NBSP}FCFA`);
     expect(formatMoney('0.00', 'XOF')).toBe(`0${NBSP}FCFA`);
   });
-  it('conserve les décimales non nulles pour le franc CFA', () => {
-    expect(formatMoney('1500.50', 'XOF')).toBe(`1${NBSP}500,50${NBSP}FCFA`);
+  it('n\'affiche jamais de décimales pour XOF, XAF, GNF et CDF (arrondi à l\'unité)', () => {
+    expect(formatMoney('1500.50', 'XOF')).toBe(`1${NBSP}501${NBSP}FCFA`);
+    expect(formatMoney('1500.40', 'XAF')).toBe(`1${NBSP}500${NBSP}FCFA`);
+    expect(formatMoney('85000.00', 'GNF')).toBe(`85${NBSP}000${NBSP}GNF`);
+    expect(formatMoney('-2000', 'CDF')).toBe(`-2${NBSP}000${NBSP}CDF`);
   });
   it('affiche toujours deux décimales pour les autres devises', () => {
     expect(formatMoney('12', 'EUR')).toBe(`12,00${NBSP}EUR`);
@@ -67,5 +70,27 @@ describe('arithmétique décimale', () => {
     expect(isPositiveAmount('0.00')).toBe(false);
     expect(isPositiveAmount('-1.00')).toBe(false);
     expect(isPositiveAmount('x')).toBe(false);
+  });
+});
+
+describe('devises sans subdivision (R7)', () => {
+  it('refuse les décimales à la saisie pour XOF, XAF, GNF, CDF', () => {
+    for (const currency of ['XOF', 'XAF', 'GNF', 'CDF']) {
+      const result = parseMoneyInput('1500,5', currency);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain('sans décimales');
+    }
+  });
+  it('accepte un entier, ou des décimales nulles, et envoie un montant entier', () => {
+    expect(parseMoneyInput('25 000', 'XOF')).toEqual({ ok: true, amount: '25000.00' });
+    expect(parseMoneyInput('25000,00', 'XAF')).toEqual({ ok: true, amount: '25000.00' });
+  });
+  it('conserve les décimales pour les autres devises', () => {
+    expect(parseMoneyInput('12,5', 'EUR')).toEqual({ ok: true, amount: '12.50' });
+  });
+  it('arrondit le total de ligne à l\'unité', () => {
+    expect(lineTotal('1001.00', '0.5', 'XOF')).toBe('501.00');
+    expect(lineTotal('1000.00', '0.0004', 'XOF')).toBe('0.00');
+    expect(lineTotal('333.00', '1.5', 'GNF')).toBe('500.00');
   });
 });

@@ -66,3 +66,15 @@ describe('codes de la console plateforme', () => {
     }
   });
 });
+
+describe('correctifs de la revue santé (R7, R9, sécurité)', () => {
+  it('traduit les nouveaux codes', () => {
+    expect(describeApiError({ status: 422, code: 'amount_scale' })).toContain('sans décimales');
+    expect(describeApiError({ status: 503, code: 'payment_provider_unavailable' })).toContain('fournisseur de paiement');
+    expect(describeApiError({ status: 422, code: 'cash_register_site_mismatch' })).toContain('même site');
+    expect(describeApiError({ status: 409, code: 'invoice_not_issued' })).toContain('émise');
+    expect(describeApiError({ status: 409, code: 'plan_not_allowed_in_trial' })).toContain('période d\'essai');
+    expect(describeApiError({ status: 403, code: 'mfa_enrollment_required_cli' })).toContain('équipe d\'exploitation');
+    expect(describeApiError({ status: 429, code: 'throttled' })).toBe('Trop de tentatives, réessayez dans quelques instants.');
+  });
+});

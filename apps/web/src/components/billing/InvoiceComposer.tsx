@@ -4,6 +4,7 @@ import { useActionState, useState } from 'react';
 import { createInvoiceAction } from '@/actions/billing-invoices';
 import { PatientSearch } from '@/components/forms/PatientSearch';
 import { Alert } from '@/components/ui/Alert';
+import { MedicalInfoWarning } from '@/components/ui/MedicalInfoWarning';
 import { FormMessage } from '@/components/ui/FormMessage';
 import { buttonClass, inputClass } from '@/components/ui/styles';
 import { CATEGORY_LABELS } from '@/lib/domain/billing';
@@ -16,7 +17,7 @@ import {
   type CatalogItemRef,
   type DraftLine,
 } from '@/lib/domain/billing-draft';
-import { formatMoney } from '@/lib/domain/money';
+import { formatMoney, isZeroDecimalCurrency } from '@/lib/domain/money';
 import { EMPTY_FORM_STATE } from '@/lib/forms';
 
 export interface InvoiceComposerProps {
@@ -71,6 +72,7 @@ export function InvoiceComposer({ sites, catalog, currency, allowFreeLines, init
           quantity: String(formData.get('freeQuantity') ?? '1'),
         },
         crypto.randomUUID(),
+        currency,
       ),
     );
   }
@@ -119,7 +121,8 @@ export function InvoiceComposer({ sites, catalog, currency, allowFreeLines, init
             <form action={onAddFree} className="mt-3 grid gap-3 sm:grid-cols-2">
               <div>
                 <label htmlFor="freeDescription" className="mb-1 block text-sm font-medium">Libellé</label>
-                <input id="freeDescription" name="freeDescription" className={inputClass} />
+                <input id="freeDescription" name="freeDescription" className={inputClass} aria-describedby="freeDescription-warning" />
+                <MedicalInfoWarning id="freeDescription-warning" />
               </div>
               <div>
                 <label htmlFor="freeCategory" className="mb-1 block text-sm font-medium">Catégorie</label>
@@ -131,7 +134,8 @@ export function InvoiceComposer({ sites, catalog, currency, allowFreeLines, init
               </div>
               <div>
                 <label htmlFor="freePrice" className="mb-1 block text-sm font-medium">Prix unitaire ({currency})</label>
-                <input id="freePrice" name="freePrice" inputMode="decimal" className={inputClass} />
+                <input id="freePrice" name="freePrice" inputMode={isZeroDecimalCurrency(currency) ? 'numeric' : 'decimal'} className={inputClass} aria-describedby={isZeroDecimalCurrency(currency) ? 'freePrice-hint' : undefined} />
+                {isZeroDecimalCurrency(currency) ? <p id="freePrice-hint" className="text-sm text-slate-700">Montant entier, sans décimales.</p> : null}
               </div>
               <div>
                 <label htmlFor="freeQuantity" className="mb-1 block text-sm font-medium">Quantité</label>
@@ -159,13 +163,14 @@ export function InvoiceComposer({ sites, catalog, currency, allowFreeLines, init
             ))}
           </ul>
         )}
-        <p className="mt-3 text-right text-lg font-semibold" aria-live="polite">Total estimé : {formatMoney(draftTotal(lines), currency)}</p>
+        <p className="mt-3 text-right text-lg font-semibold" aria-live="polite">Total estimé : {formatMoney(draftTotal(lines, currency), currency)}</p>
       </section>
 
       <form action={formAction} className="space-y-4 rounded-md border border-slate-300 bg-white p-4" noValidate>
         <h2 className="text-lg font-semibold">3. Site et validation</h2>
         <FormMessage state={state} />
         <input type="hidden" name="patientId" value={patient?.id ?? ''} />
+        <input type="hidden" name="currency" value={currency} />
         <input type="hidden" name="lines" value={serializeLines(lines)} />
         {appointmentId ? <input type="hidden" name="appointmentId" value={appointmentId} /> : null}
         <div>
@@ -180,7 +185,8 @@ export function InvoiceComposer({ sites, catalog, currency, allowFreeLines, init
         </div>
         <div>
           <label htmlFor="notes" className="mb-1 block text-sm font-medium">Note (facultative)</label>
-          <input id="notes" name="notes" maxLength={500} className={inputClass} />
+          <input id="notes" name="notes" maxLength={500} className={inputClass} aria-describedby="notes-warning" />
+          <MedicalInfoWarning id="notes-warning" />
         </div>
         <div className="flex flex-wrap gap-3">
           <button type="submit" name="intent" value="draft" disabled={pending} className={buttonClass.secondary}>Enregistrer le brouillon</button>

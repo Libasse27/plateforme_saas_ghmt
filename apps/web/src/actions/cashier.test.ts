@@ -5,7 +5,7 @@ vi.mock('next/navigation', async () => (await import('./test-kit')).navigationMo
 vi.mock('next/cache', async () => (await import('./test-kit')).cacheMock());
 vi.mock('next/headers', async () => (await import('./test-kit')).headersMock());
 
-import { closeSessionAction, createRegisterAction, openSessionAction, validateSessionAction } from './cashier';
+import { closeSessionAction, createRegisterAction, forceCloseSessionAction, openSessionAction, validateSessionAction } from './cashier';
 import { form, stubApi } from './test-kit';
 
 const SITE = '4a2b8c1e-1a2b-4c3d-8e9f-0123456789ab';
@@ -81,5 +81,43 @@ describe('validateSessionAction', () => {
     expect(state.ok).toBe(false);
     expect(state.message).toContain('séparation des tâches');
     expect((await validateSessionAction({}, form({ sessionId: 'x' }))).ok).toBe(false);
+  });
+});
+
+describe('R8 : note obligatoire si écart et clôture forcée', () => {
+  const CLOSED = { id: SESSION, status: 'closed', currency: 'XOF', expectedTotal: '60000.00', closingCounted: '59000.00', variance: '-1000.00' };
+
+  it('exige une note quand l\'écart n\'est pas nul (aucun appel)', async () => {
+    const { calls } = stubApi(() => okEnvelope(CLOSED));
+    const state = await closeSessionAction({}, form({ sessionId: SESSION, countedAmount: '59000', expectedTotal: '60000.00', currency: 'XOF' }));
+    expect(state.fieldErrors?.note).toContain('obligatoire');
+    expect(calls.some((c) => c.path.endsWith('/close'))).toBe(false);
+  });
+  it('accepte sans note quand l\'écart est nul, ou avec une note', async () => {
+    const { calls } = stubApi(() => okEnvelope(CLOSED));
+    expect((await closeSessionAction({}, form({ sessionId: SESSION, countedAmount: '60 000', expectedTotal: '60000.00' }))).ok).toBe(true);
+    expect((await closeSessionAction({}, form({ sessionId: SESSION, countedAmount: '59000', expectedTotal: '60000.00', note: 'billet déchiré' }))).ok).toBe(true);
+    expect(calls).toHaveLength(2);
+  });
+  it('renvoie l\'erreur de champ de l\'API si elle exige la note', async () => {
+    stubApi(() => problem(422, 'validation_failed', { errors: [{ path: 'note', message: 'note obligatoire' }] }));
+    const state = await closeSessionAction({}, form({ sessionId: SESSION, countedAmount: '59000' }));
+    expect(state.ok).toBe(false);
+  });
+  it('clôture forcée : montant et motif obligatoires', async () => {
+    const { calls } = stubApi(() => okEnvelope(CLOSED));
+    const missing = await forceCloseSessionAction({}, form({ sessionId: SESSION, countedAmount: '', reason: 'a' }));
+    expect(missing.fieldErrors).toMatchObject({ countedAmount: expect.any(String), reason: expect.any(String) });
+    expect((await forceCloseSessionAction({}, form({ sessionId: 'x', countedAmount: '1', reason: 'oubli' }))).ok).toBe(false);
+    expect(calls).toHaveLength(0);
+    const state = await forceCloseSessionAction({}, form({ sessionId: SESSION, countedAmount: '59 000', reason: ' caissier absent ' }));
+    expect(state.ok).toBe(true);
+    expect(state.message).toContain(`écart : -1${NBSP}000${NBSP}FCFA`);
+    expect(calls.at(-1)).toMatchObject({ path: `/cashier/sessions/${SESSION}/force-close`, body: { countedAmount: '59000.00', reason: 'caissier absent' } });
+  });
+  it('clôture forcée : motif trop long, erreur API (interdit à l\'ouvreur)', async () => {
+    stubApi(() => problem(403, 'cash_session_not_owner'));
+    expect((await forceCloseSessionAction({}, form({ sessionId: SESSION, countedAmount: '1', reason: 'x'.repeat(501) }))).fieldErrors?.reason).toContain('500');
+    expect((await forceCloseSessionAction({}, form({ sessionId: SESSION, countedAmount: '1', reason: 'oubli' }))).ok).toBe(false);
   });
 });

@@ -5,14 +5,15 @@ import {
   platformLogoutSchema,
   platformMfaVerifySchema,
   platformRefreshSchema,
-  platformTotpActivateSchema,
+  platformPasswordChangeSchema,
   type PlatformLoginInput,
   type PlatformMfaVerifyInput,
+  type PlatformPasswordChangeInput,
 } from '@ghmt/shared';
 import { ZodValidationPipe } from '../../../common/pipes/zod-validation.pipe';
 import type { PlatformPrincipal } from '../auth/platform-auth.guard';
 import { PlatformLoginService } from '../auth/platform-login.service';
-import { PlatformMfaService } from '../auth/platform-mfa.service';
+import { PlatformPasswordService } from '../auth/platform-password.service';
 import { PlatformRefreshService } from '../auth/platform-refresh.service';
 import { CurrentPlatformUser, PlatformAuthenticatedOnly, PlatformController, PlatformPublic } from '../auth/platform.decorators';
 import { PLATFORM_LOGIN_THROTTLE, PLATFORM_MFA_THROTTLE, PLATFORM_REFRESH_THROTTLE } from '../platform.constants';
@@ -22,7 +23,7 @@ import { PLATFORM_LOGIN_THROTTLE, PLATFORM_MFA_THROTTLE, PLATFORM_REFRESH_THROTT
 export class PlatformAuthController {
   constructor(
     private readonly login: PlatformLoginService,
-    private readonly mfa: PlatformMfaService,
+    private readonly passwords: PlatformPasswordService,
     private readonly refreshService: PlatformRefreshService,
   ) {}
 
@@ -42,19 +43,16 @@ export class PlatformAuthController {
     return this.login.verifyMfa(body);
   }
 
+  /**
+   * Changement du mot de passe (mot de passe actuel exigé) : révoque les autres sessions. L'enrôlement du second facteur
+   * n'existe plus en ligne : il est fait par `scripts/create-platform-admin.mts` (revue sécurité M2).
+   */
   @PlatformAuthenticatedOnly()
+  @Throttle(PLATFORM_LOGIN_THROTTLE)
   @HttpCode(200)
-  @Post('mfa/totp/setup')
-  setup(@CurrentPlatformUser() principal: PlatformPrincipal) {
-    return this.mfa.setup(principal);
-  }
-
-  @PlatformAuthenticatedOnly()
-  @Throttle(PLATFORM_MFA_THROTTLE)
-  @HttpCode(200)
-  @Post('mfa/totp/activate')
-  activate(@CurrentPlatformUser() principal: PlatformPrincipal, @Body(new ZodValidationPipe(platformTotpActivateSchema)) body: { code: string }) {
-    return this.mfa.activate(principal, body.code);
+  @Post('password/change')
+  changePassword(@CurrentPlatformUser() principal: PlatformPrincipal, @Body(new ZodValidationPipe(platformPasswordChangeSchema)) body: PlatformPasswordChangeInput) {
+    return this.passwords.change(principal, body);
   }
 
   @PlatformPublic()

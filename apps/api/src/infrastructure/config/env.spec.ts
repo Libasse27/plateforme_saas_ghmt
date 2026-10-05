@@ -40,6 +40,31 @@ describe('loadEnv : production', () => {
   });
 
   it('accepte la production quand les proxys de confiance sont déclarés', () => {
-    expect(loadEnv({ ...BASE, NODE_ENV: 'production', TRUSTED_PROXIES: '10.0.0.0/24' }).TRUSTED_PROXIES).toEqual(['10.0.0.0/24']);
+    expect(loadEnv({ ...BASE, NODE_ENV: 'production', TRUSTED_PROXIES: '10.0.0.0/24', JWT_PLATFORM_SECRET: 'p'.repeat(40) }).TRUSTED_PROXIES).toEqual(['10.0.0.0/24']);
+  });
+});
+
+describe('loadEnv : secret JWT du realm plateforme (L1)', () => {
+  const PRODUCTION = { ...BASE, NODE_ENV: 'production', TRUSTED_PROXIES: '10.0.0.0/24' };
+
+  it('dérive un secret distinct de JWT_ACCESS_SECRET hors production quand JWT_PLATFORM_SECRET est absent', () => {
+    const env = loadEnv(BASE);
+
+    expect(env.JWT_PLATFORM_SECRET.length).toBeGreaterThanOrEqual(32);
+    expect(env.JWT_PLATFORM_SECRET).not.toBe(env.JWT_ACCESS_SECRET);
+  });
+
+  it('utilise JWT_PLATFORM_SECRET quand il est fourni', () => {
+    expect(loadEnv({ ...BASE, JWT_PLATFORM_SECRET: 'p'.repeat(40) }).JWT_PLATFORM_SECRET).toBe('p'.repeat(40));
+  });
+
+  it('refuse un secret plateforme de moins de 32 caractères', () => {
+    expect(() => loadEnv({ ...BASE, JWT_PLATFORM_SECRET: 'court' })).toThrow(/JWT_PLATFORM_SECRET/);
+  });
+
+  it('exige en production un secret plateforme défini et différent du secret tenant', () => {
+    expect(() => loadEnv(PRODUCTION)).toThrow(/JWT_PLATFORM_SECRET/);
+    expect(() => loadEnv({ ...PRODUCTION, JWT_PLATFORM_SECRET: BASE.JWT_ACCESS_SECRET })).toThrow(/distinct/);
+    expect(loadEnv({ ...PRODUCTION, JWT_PLATFORM_SECRET: 'p'.repeat(40) }).JWT_PLATFORM_SECRET).toBe('p'.repeat(40));
   });
 });

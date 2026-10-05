@@ -1,23 +1,28 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { InvoicePaymentView, OnlinePaymentView, RecordPaymentInput } from '@ghmt/shared';
+import type { AbandonPaymentView, InvoicePaymentView, OnlinePaymentView, RecordPaymentInput } from '@ghmt/shared';
 import { AuditService } from '../../../common/audit/audit.service';
 import { RequestContext } from '../../../common/context/request-context';
 import { DomainError } from '../../../common/errors/domain-error';
+import { assertAmountScale } from '../../../common/money/currency-scale';
 import { addMoney, formatMoney, parseMoney, subtractMoney, type Money } from '../../../common/money/money';
-import { PAYMENTS_GATEWAY, type InitiatedPayment, type PaymentsGateway } from '../../../common/payments/payments-gateway';
+import { PAYMENTS_GATEWAY, PaymentProviderUnavailableError, type InitiatedPayment, type PaymentsGateway } from '../../../common/payments/payments-gateway';
 import { Clock } from '../../../common/time/clock';
-import type { PatientInvoice } from '../../../generated/prisma/client';
+import type { PatientInvoice, PatientPayment } from '../../../generated/prisma/client';
 import { TenantDb, type TenantTx } from '../../../infrastructure/prisma/tenant-db.service';
 import { statusAfterPayments } from '../domain/invoice-status';
 import { toPaymentView } from '../mappers/billing.mapper';
 import { CashierRepository } from '../repositories/cashier.repository';
 import { InvoicesRepository } from '../repositories/invoices.repository';
 import { refIssue } from './billing-errors';
+import { RefreshThrottle } from './refresh-throttle';
 import { SiteScopeService } from './site-scope.service';
 
 const PAYABLE_STATUSES: readonly string[] = ['issued', 'partially_paid'];
 const ONLINE_METHODS: readonly string[] = ['mobile_money', 'card'];
+/** Modes rattachés à une session de caisse ouverte par l'encaisseur (espèces, chèque, virement). */
+const CASH_SESSION_METHODS: readonly string[] = ['cash', 'other'];
 export const PROVIDER_UNAVAILABLE_REASON = 'provider_unavailable';
+const ABANDONED_REASON = 'abandoned';
 
 type PaymentOutcome = InvoicePaymentView | OnlinePaymentView;
 
@@ -32,6 +37,7 @@ export class InvoicePaymentsService {
     private readonly audit: AuditService,
     private readonly context: RequestContext,
     private readonly clock: Clock,
+    private readonly refreshThrottle: RefreshThrottle,
     @Inject(PAYMENTS_GATEWAY) private readonly gateway: PaymentsGateway,
   ) {}
 
@@ -39,23 +45,80 @@ export class InvoicePaymentsService {
     return ONLINE_METHODS.includes(input.method) ? this.initiateOnline(invoiceId, input) : this.recordImmediate(invoiceId, input);
   }
 
-  /** Reprise manuelle : re-vérifie la tentative auprès du fournisseur (webhook perdu) puis relit le paiement. */
+  /** Reprise manuelle : re-vérifie la tentative auprès du fournisseur (webhook perdu) puis relit le paiement. Auditée. */
   async refresh(paymentId: string): Promise<InvoicePaymentView> {
     const { tenantId } = this.context.requirePrincipal();
-    const attemptId = await this.db.run(async (tx) => {
-      const siteScope = await this.siteScopes.resolve(tx, tenantId, 'cashier:payment:create');
-      const payment = await this.invoices.findPayment(tx, tenantId, paymentId);
-      const invoice = payment ? await this.invoices.findDetail(tx, tenantId, payment.invoiceId) : null;
-      if (!payment || !invoice || !payment.attemptId || !siteScope.includes(invoice.siteId)) throw DomainError.notFound('Paiement');
-      return payment.attemptId;
-    });
+    const attemptId = await this.requireOnlineAttempt(tenantId, paymentId);
+    this.refreshThrottle.assertAllowed(paymentId);
     // Le règlement publie `payment.succeeded|failed` : le gestionnaire de ce module met le paiement à jour.
     await this.gateway.refresh(attemptId);
     return this.db.run(async (tx) => {
       const payment = await this.invoices.findPayment(tx, tenantId, paymentId);
       if (!payment) throw DomainError.notFound('Paiement');
+      await this.audit.record(tx, tenantId, {
+        action: 'payment.refreshed',
+        resourceType: 'payment',
+        resourceId: paymentId,
+        patientId: payment.patientId,
+        changes: { invoiceId: payment.invoiceId, status: payment.status },
+      });
       return toPaymentView(payment);
     });
+  }
+
+  /**
+   * Abandon par l'encaisseur (R4) : re-vérifie la tentative chez le fournisseur. S'il y a eu succès, le paiement est
+   * enregistré ; sinon il passe à `cancelled`, le montant réservé est libéré et la tentative est abandonnée (un succès
+   * confirmé plus tard reste enregistrable). Fournisseur injoignable ⇒ 502 : on ne libère pas un montant peut-être encaissé.
+   */
+  async abandon(paymentId: string): Promise<AbandonPaymentView> {
+    const { tenantId } = this.context.requirePrincipal();
+    const found = await this.db.run(async (tx) => {
+      const payment = await this.findInScope(tx, tenantId, paymentId);
+      return { status: payment.status, attemptId: payment.attemptId };
+    });
+    if (found.status === 'succeeded') return { status: 'succeeded' };
+    if (found.status !== 'pending') return { status: 'cancelled' };
+    if (found.attemptId) await this.gateway.refresh(found.attemptId);
+
+    const outcome = await this.db.run((tx) => this.cancelIfStillPending(tx, tenantId, paymentId));
+    if (outcome === 'cancelled' && found.attemptId) await this.gateway.cancel(found.attemptId);
+    return { status: outcome };
+  }
+
+  /** Sous verrou de facture : annule le paiement s'il est toujours en attente, sinon renvoie son issue actuelle. */
+  private async cancelIfStillPending(tx: TenantTx, tenantId: string, paymentId: string): Promise<AbandonPaymentView['status']> {
+    const payment = await this.findInScope(tx, tenantId, paymentId);
+    await this.invoices.lock(tx, tenantId, payment.invoiceId);
+    const current = await this.invoices.findPayment(tx, tenantId, paymentId);
+    if (!current) throw DomainError.notFound('Paiement');
+    if (current.status === 'succeeded') return 'succeeded';
+    if (current.status === 'pending') {
+      await this.invoices.updatePendingPayment(tx, tenantId, paymentId, { status: 'cancelled', failureReason: ABANDONED_REASON });
+      await this.audit.record(tx, tenantId, {
+        action: 'payment.abandoned',
+        resourceType: 'payment',
+        resourceId: paymentId,
+        patientId: current.patientId,
+        changes: { invoiceId: current.invoiceId, method: current.method, amount: formatMoney(current.amount), attemptId: current.attemptId },
+      });
+    }
+    return 'cancelled';
+  }
+
+  /** Identifiant de tentative d'un paiement en ligne de la portée de l'encaisseur, sinon 404. */
+  private async requireOnlineAttempt(tenantId: string, paymentId: string): Promise<string> {
+    const payment = await this.db.run((tx) => this.findInScope(tx, tenantId, paymentId));
+    if (!payment.attemptId) throw DomainError.notFound('Paiement');
+    return payment.attemptId;
+  }
+
+  private async findInScope(tx: TenantTx, tenantId: string, paymentId: string): Promise<PatientPayment> {
+    const siteScope = await this.siteScopes.resolve(tx, tenantId, 'cashier:payment:create');
+    const payment = await this.invoices.findPayment(tx, tenantId, paymentId);
+    const invoice = payment ? await this.invoices.findDetail(tx, tenantId, payment.invoiceId) : null;
+    if (!payment || !invoice || !siteScope.includes(invoice.siteId)) throw DomainError.notFound('Paiement');
+    return payment;
   }
 
   private recordImmediate(invoiceId: string, input: RecordPaymentInput): Promise<InvoicePaymentView> {
@@ -63,7 +126,7 @@ export class InvoicePaymentsService {
     return this.db.run(async (tx) => {
       const invoice = await this.lockPayable(tx, tenantId, invoiceId);
       const amount = await this.assertWithinBalance(tx, tenantId, invoice, input.amount);
-      const cashSessionId = input.method === 'cash' ? await this.requireOwnOpenSession(tx, tenantId, userId, invoice, input.cashSessionId) : null;
+      const cashSessionId = CASH_SESSION_METHODS.includes(input.method) ? await this.requireOwnOpenSession(tx, tenantId, userId, invoice, input.cashSessionId) : null;
 
       const now = this.clock.now();
       const payment = await this.invoices.createPayment(tx, {
@@ -140,10 +203,7 @@ export class InvoicePaymentsService {
         idempotencyKey: `patient-payment:${payment.id}`,
       });
     } catch (error: unknown) {
-      // L'échec libère la réservation : une nouvelle demande reste possible.
-      await this.db.run((tx) =>
-        this.invoices.updatePendingPayment(tx, tenantId, payment.id, { status: 'failed', failureReason: PROVIDER_UNAVAILABLE_REASON }),
-      );
+      await this.handleInitiationFailure(tenantId, payment, error);
       throw error;
     }
 
@@ -160,6 +220,30 @@ export class InvoicePaymentsService {
     });
   }
 
+  /**
+   * Échec technique (la tentative reste `pending` chez la plateforme) : le paiement reste en attente, rattaché à sa tentative,
+   * et le job de relance l'interroge. Refus explicite ou erreur inconnue : le paiement échoue et libère la réservation.
+   */
+  private async handleInitiationFailure(tenantId: string, payment: PatientPayment, error: unknown): Promise<void> {
+    if (error instanceof PaymentProviderUnavailableError && error.attemptRetained && error.attemptId) {
+      const attemptId = error.attemptId;
+      await this.db.run((tx) => this.invoices.updatePendingPayment(tx, tenantId, payment.id, { attemptId }));
+      return;
+    }
+    await this.db.run(async (tx) => {
+      const updated = await this.invoices.updatePendingPayment(tx, tenantId, payment.id, { status: 'failed', failureReason: PROVIDER_UNAVAILABLE_REASON });
+      if (!updated) return;
+      await this.audit.record(tx, tenantId, {
+        action: 'payment.failed',
+        resourceType: 'payment',
+        resourceId: payment.id,
+        patientId: payment.patientId,
+        outcome: 'failure',
+        changes: { invoiceId: payment.invoiceId, method: payment.method, reason: PROVIDER_UNAVAILABLE_REASON },
+      });
+    });
+  }
+
   /** Verrouille la facture et vérifie qu'elle est encaissable dans la portée de l'encaisseur. */
   private async lockPayable(tx: TenantTx, tenantId: string, invoiceId: string): Promise<PatientInvoice> {
     const siteScope = await this.siteScopes.resolve(tx, tenantId, 'cashier:payment:create');
@@ -173,6 +257,7 @@ export class InvoicePaymentsService {
 
   /** Le montant ne peut dépasser le reste dû, déduction faite des paiements en ligne en attente (qui réservent leur montant). */
   private async assertWithinBalance(tx: TenantTx, tenantId: string, invoice: PatientInvoice, rawAmount: string): Promise<Money> {
+    assertAmountScale(rawAmount, invoice.currency);
     const amount = parseMoney(rawAmount);
     const pending = await this.invoices.pendingOnlineTotal(tx, tenantId, invoice.id);
     const balance = subtractMoney(subtractMoney(invoice.total, invoice.amountPaid), pending.total);
@@ -192,6 +277,11 @@ export class InvoicePaymentsService {
       throw DomainError.forbidden('cash_session_not_owned', 'Cette session de caisse a été ouverte par un autre utilisateur.', 'cashier:payment:create');
     }
     if (session.status !== 'open') throw DomainError.conflict('cash_session_not_open', 'Cette session de caisse n’est plus ouverte.');
+    if (session.register.siteId !== invoice.siteId) {
+      throw new DomainError('cash_register_site_mismatch', 422, 'Unprocessable Entity', 'La caisse de cette session n’est pas rattachée au site de la facture.', {
+        errors: [{ path: 'cashSessionId', code: 'cash_register_site_mismatch', message: 'Caisse d’un autre site que la facture.' }],
+      });
+    }
     return session.id;
   }
 

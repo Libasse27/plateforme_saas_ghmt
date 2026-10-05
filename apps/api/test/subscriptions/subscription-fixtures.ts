@@ -9,7 +9,7 @@ import { PlatformDb } from '../../src/infrastructure/prisma/platform-db.service'
 import { FakePaymentsGateway } from '../helpers/fake-payments-gateway';
 import type { TenantFixture } from '../helpers/fixtures';
 import { MutableClock } from '../helpers/mutable-clock';
-import { bearer, http } from '../helpers/platform';
+import { bearer, http, platformClientIp } from '../helpers/platform';
 import type { ProviderOverride } from '../helpers/test-app';
 import { PAYMENTS_GATEWAY } from '../../src/common/payments/payments-gateway';
 
@@ -71,6 +71,7 @@ export async function invoicesOf(app: INestApplication, tenant: TenantFixture, q
 export async function openConversionInvoice(app: INestApplication, tenant: TenantFixture, planCode = 'standard'): Promise<SaasInvoiceView> {
   const res = await http(app)
     .post(`${SUBSCRIPTION}/change`)
+    .set('X-Forwarded-For', platformClientIp())
     .set(bearer(tenant.adminToken))
     .send({ planCode, billingPeriod: 'monthly' })
     .expect(200);

@@ -1,10 +1,11 @@
-import type { InvoiceLineView, InvoicePaymentView, InvoiceSummaryView } from '@ghmt/shared';
+import type { InvoiceSummaryView } from '@ghmt/shared';
 import Link from 'next/link';
 import { refreshPaymentAction } from '@/actions/payments';
+import { AbandonPayment } from '@/components/billing/AbandonPayment';
 import { ActionForm } from '@/components/forms/ActionForm';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Cell, DataTable } from '@/components/ui/DataTable';
-import { CATEGORY_LABELS, INVOICE_STATUS_LABELS, PAYMENT_METHOD_LABELS, PAYMENT_STATUS_LABELS } from '@/lib/domain/billing';
+import { CATEGORY_LABELS, INVOICE_STATUS_LABELS, PAYMENT_METHOD_LABELS, PAYMENT_STATUS_LABELS, displayLabel, type InvoiceLine, type PaymentStatus, type PaymentView } from '@/lib/domain/billing';
 import { formatMoney } from '@/lib/domain/money';
 import { formatDateTime, formatDay } from '@/lib/format/dates';
 
@@ -16,7 +17,7 @@ const INVOICE_TONES: Readonly<Record<InvoiceSummaryView['status'], BadgeTone>> =
   void: 'danger',
 };
 
-const PAYMENT_TONES: Readonly<Record<InvoicePaymentView['status'], BadgeTone>> = { pending: 'warning', succeeded: 'success', failed: 'danger' };
+const PAYMENT_TONES: Readonly<Record<PaymentStatus, BadgeTone>> = { pending: 'warning', succeeded: 'success', failed: 'danger', cancelled: 'neutral' };
 
 export function InvoiceStatusBadge({ status }: { readonly status: InvoiceSummaryView['status'] }) {
   return <Badge tone={INVOICE_TONES[status]}>{INVOICE_STATUS_LABELS[status]}</Badge>;
@@ -45,7 +46,7 @@ export function InvoiceList({ invoices, timeZone }: { readonly invoices: readonl
   );
 }
 
-export function InvoiceLinesTable({ lines, currency }: { readonly lines: readonly InvoiceLineView[]; readonly currency: string }) {
+export function InvoiceLinesTable({ lines, currency }: { readonly lines: readonly InvoiceLine[]; readonly currency: string }) {
   return (
     <DataTable
       caption="Lignes de la facture"
@@ -53,7 +54,7 @@ export function InvoiceLinesTable({ lines, currency }: { readonly lines: readonl
     >
       {lines.map((line) => (
         <tr key={line.id || line.lineNo}>
-          <Cell>{line.description}</Cell>
+          <Cell>{displayLabel(line)}</Cell>
           <Cell>{CATEGORY_LABELS[line.category]}</Cell>
           <Cell align="right">{line.quantity}</Cell>
           <Cell align="right">{formatMoney(line.unitPrice, currency)}</Cell>
@@ -65,7 +66,7 @@ export function InvoiceLinesTable({ lines, currency }: { readonly lines: readonl
 }
 
 export interface PaymentsTableProps {
-  readonly payments: readonly InvoicePaymentView[];
+  readonly payments: readonly PaymentView[];
   readonly invoiceId: string;
   readonly timeZone: string;
   readonly canRefresh: boolean;
@@ -88,12 +89,14 @@ export function PaymentsTable({ payments, invoiceId, timeZone, canRefresh }: Pay
             <Cell><Badge tone={PAYMENT_TONES[payment.status]}>{PAYMENT_STATUS_LABELS[payment.status]}</Badge></Cell>
             <Cell>
               {payment.reference ? <span className="block text-sm">Réf. {payment.reference}</span> : null}
+              {payment.anomaly === 'overpaid' ? <span className="block text-sm font-semibold text-amber-900">Anomalie : paiement supérieur au reste dû (trop-perçu)</span> : null}
               {payment.failureReason ? <span className="block text-sm text-red-800">{payment.failureReason}</span> : null}
               {payment.status === 'pending' && online ? (
                 <div className="space-y-2">
                   {payment.checkoutUrl && /^https?:\/\//i.test(payment.checkoutUrl) ? (
                     <a href={payment.checkoutUrl} rel="noopener noreferrer" className="block text-sm font-semibold text-blue-800 underline">Reprendre le paiement</a>
                   ) : null}
+                  {canRefresh && payment.method === 'mobile_money' ? <AbandonPayment paymentId={payment.id} invoiceId={invoiceId} /> : null}
                   {canRefresh ? (
                     <ActionForm
                       action={refreshPaymentAction}

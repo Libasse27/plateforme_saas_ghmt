@@ -107,7 +107,24 @@ export interface PlanSummary {
 /** Offre publique proposée au changement de plan (`GET /subscription/plans`). */
 export interface PublicPlanView extends PlanSummary {
   readonly entitlements: Entitlements;
+  /** Faux pour une offre non sélectionnable dans l'état actuel (en essai : seules basic et standard le sont). */
+  readonly selectable: boolean;
 }
+
+/** Mode d'accès de l'établissement selon l'abonnement : normal, restreint (grâce) ou continuité des soins (suspendu, résilié, expiré). */
+export const SUBSCRIPTION_ACCESS_MODES = ['normal', 'restricted', 'continuity'] as const;
+export type SubscriptionAccessMode = (typeof SUBSCRIPTION_ACCESS_MODES)[number];
+
+/** `GET /subscription/status` : lisible par tout utilisateur de l'établissement, sans donnée financière. */
+export interface SubscriptionStatusView {
+  readonly status: SubscriptionStatus;
+  readonly trialEndsAt: string | null;
+  readonly daysLeft: number | null;
+  readonly mode: SubscriptionAccessMode;
+}
+
+/** Offres sélectionnables pendant l'essai. */
+export const TRIAL_SELECTABLE_PLAN_CODES = ['basic', 'standard'] as const;
 
 export interface SubscriptionUsage {
   readonly users: number;

@@ -107,7 +107,7 @@ describe('numérotation des factures sans trou (concurrence)', () => {
     const accountant = await createUserWithRole(app, tenant, 'accountant');
     const [first, second] = await drafts(2);
     const issued = await issue(first!.id).expect(200);
-    await http(app).post(`${BILLING}/invoices/${first!.id}/void`).set(bearer(accountant)).send({ reason: 'Erreur de saisie' }).expect(200);
+    await http(app).post(`${BILLING}/invoices/${first!.id}/void`).set(bearer(accountant)).send({ reasonCode: 'other', comment: 'Erreur de saisie' }).expect(200);
 
     const next = await issue(second!.id).expect(200);
 

@@ -83,8 +83,13 @@ export function toEntitlements(raw: unknown): Entitlements {
   };
 }
 
-export function toPublicPlan(raw: unknown): PublicPlanView {
-  return { ...toPlanSummary(raw), entitlements: toEntitlements(rec(raw).entitlements) };
+/** Offre publique ; `selectable` est false en essai pour les offres réservées (l'API reste l'autorité). */
+export interface PlanOffer extends PublicPlanView {
+  readonly selectable: boolean;
+}
+
+export function toPublicPlan(raw: unknown): PlanOffer {
+  return { ...toPlanSummary(raw), entitlements: toEntitlements(rec(raw).entitlements), selectable: rec(raw).selectable !== false };
 }
 
 export function toSubscription(raw: unknown): SubscriptionView | null {
@@ -167,7 +172,7 @@ export function toChangePlanResult(raw: unknown): ChangePlanOutcome {
 }
 
 export interface Banner {
-  readonly tone: 'warning' | 'error';
+  readonly tone: 'info' | 'warning' | 'error';
   readonly message: string;
 }
 
@@ -190,6 +195,34 @@ export function subscriptionBanner(status: SubscriptionStatus): Banner | null {
     default:
       return null;
   }
+}
+
+export const SUBSCRIPTION_MODES = ['normal', 'restricted', 'continuity'] as const;
+export type SubscriptionMode = (typeof SUBSCRIPTION_MODES)[number];
+
+/** Statut léger accessible à tout utilisateur authentifié (R1) : aucune donnée financière. */
+export interface SubscriptionStatusView {
+  readonly status: string;
+  readonly trialEndsAt: string | null;
+  readonly daysLeft: number | null;
+  readonly mode: SubscriptionMode;
+}
+
+export function toSubscriptionStatus(raw: unknown): SubscriptionStatusView | null {
+  const data = rec(raw);
+  if (!(SUBSCRIPTION_MODES as readonly string[]).includes(str(data.mode))) return null;
+  return { status: str(data.status), trialEndsAt: strOrNull(data.trialEndsAt), daysLeft: numOrNull(data.daysLeft), mode: data.mode as SubscriptionMode };
+}
+
+export const RESTRICTED_MESSAGE = 'Abonnement en retard de paiement : certaines actions administratives sont limitées.';
+export const CONTINUITY_MESSAGE = 'Mode continuité des soins : consultation, création de patient, facturation et encaissement restent possibles.';
+
+/** Bandeau du personnel (tous les utilisateurs) selon le mode de l'abonnement ; `null` si rien à signaler. */
+export function statusBanner(view: SubscriptionStatusView): Banner | null {
+  if (view.mode === 'restricted') return { tone: 'warning', message: RESTRICTED_MESSAGE };
+  if (view.mode === 'continuity') return { tone: 'error', message: CONTINUITY_MESSAGE };
+  if (view.status === 'trial' && view.daysLeft !== null && view.daysLeft >= 0) return { tone: 'info', message: `Période d'essai — J-${String(view.daysLeft)}` };
+  return null;
 }
 
 /** Phrase de synthèse de l'état de l'abonnement (page /abonnement). */
@@ -247,7 +280,7 @@ export function changeResultMessage(result: ChangePlanOutcome, timeZone: string)
     return at ? `Changement programmé : il prendra effet le ${formatDay(at, timeZone)}, à la fin de la période en cours.` : 'Changement programmé : il prendra effet à la fin de la période en cours.';
   }
   if (result.effect === 'pending_payment') {
-    return `Le nouveau plan s'appliquera dès le paiement de la facture${invoice}. Réglez-la depuis la liste des factures ci-dessous.`;
+    return `Le nouveau plan sera activé dès le paiement de la facture${invoice}.`;
   }
   return result.invoice
     ? `Votre plan a été modifié immédiatement. Une facture a été émise${invoice} : réglez-la depuis la liste ci-dessous.`

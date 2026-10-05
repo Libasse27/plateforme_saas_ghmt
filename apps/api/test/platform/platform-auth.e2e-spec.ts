@@ -53,31 +53,12 @@ describe('platform : authentification du realm plateforme (HTTP)', () => {
       expect(me.body.data.permissions).toContain('tenants:suspend');
     });
 
-    it('impose l’enrôlement TOTP à la première connexion : jeton limité jusqu’à l’activation', async () => {
+    it('refuse la connexion d’un compte sans second facteur enrôlé (enrôlement par le script uniquement)', async () => {
       const user = await createPlatformUser(app, 'super_admin', { enrolled: false });
 
-      const res = await login(user.email).expect(200);
-      expect(res.body.data).toMatchObject({ mfaEnrolled: false, mfaRequired: true });
-      const limited = res.body.data.accessToken as string;
+      const res = await login(user.email).expect(403);
 
-      const denied = await http(app).get(`${PLATFORM}/tenants`).set(bearer(limited)).expect(403);
-      expect(denied.body.code).toBe('mfa_enrollment_required');
-      await http(app).get(`${PLATFORM}/auth/me`).set(bearer(limited)).expect(200);
-
-      const setup = await http(app).post(`${PLATFORM}/auth/mfa/totp/setup`).set(bearer(limited)).expect(200);
-      expect(setup.body.data.otpauthUrl).toMatch(/^otpauth:\/\/totp\//);
-      const activated = await http(app)
-        .post(`${PLATFORM}/auth/mfa/totp/activate`)
-        .set(bearer(limited))
-        .send({ code: await totpNow(setup.body.data.secret) })
-        .expect(200);
-      expect(activated.body.data.backupCodes).toHaveLength(10);
-
-      await http(app).get(`${PLATFORM}/tenants`).set(bearer(activated.body.data.accessToken)).expect(200);
-      // Une fois enrôlé, la connexion suivante passe par le challenge.
-      const again = await login(user.email).expect(200);
-      expect(again.body.data.mfaRequired).toBe(true);
-      expect(again.body.data.challengeId).toBeTypeOf('string');
+      expect(res.body.code).toBe('mfa_enrollment_required_cli');
     });
 
     it('refuse un mot de passe erroné et un compte inconnu avec la même réponse (anti-énumération)', async () => {

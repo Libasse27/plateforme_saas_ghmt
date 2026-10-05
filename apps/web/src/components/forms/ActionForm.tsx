@@ -21,7 +21,7 @@ export type FieldSpec =
   | (BaseField & { readonly kind: TextKind; readonly defaultValue?: string; readonly autoComplete?: string; readonly inputMode?: 'numeric' | 'decimal' | 'tel' | 'text' })
   | (BaseField & { readonly kind: 'select'; readonly options: readonly SelectOption[]; readonly defaultValue?: string; readonly placeholder?: string })
   | (BaseField & { readonly kind: 'checkbox'; readonly defaultChecked?: boolean })
-  | (BaseField & { readonly kind: 'textarea'; readonly defaultValue?: string; readonly rows?: number });
+  | (BaseField & { readonly kind: 'textarea'; readonly defaultValue?: string; readonly rows?: number; readonly maxLength?: number });
 
 export interface ActionFormProps {
   /** Server Action de l'écriture. */
@@ -70,7 +70,8 @@ function FieldView({ field, state, idPrefix }: { readonly field: FieldSpec; read
     return (
       <div className="space-y-1">
         <label htmlFor={id} className="block text-sm font-medium text-slate-900">{field.label}</label>
-        <textarea id={id} name={field.name} rows={field.rows ?? 3} defaultValue={value ?? field.defaultValue} required={field.required} aria-invalid={error ? true : undefined} className={inputClass} />
+        <textarea id={id} name={field.name} rows={field.rows ?? 3} defaultValue={value ?? field.defaultValue} required={field.required} maxLength={field.maxLength} aria-invalid={error ? true : undefined} aria-describedby={field.hint ? `${id}-hint` : undefined} className={inputClass} />
+        {field.hint ? <p id={`${id}-hint`} className="text-sm font-medium text-amber-900">{field.hint}</p> : null}
         {error ? <p className="text-sm font-medium text-red-700">{error}</p> : null}
       </div>
     );
@@ -100,6 +101,7 @@ export function ActionForm({ action, fields, hidden = {}, submitLabel, pendingLa
   const [state, formAction] = useActionState(action, EMPTY_FORM_STATE);
   const instructions = typeof state.extra?.instructions === 'string' ? state.extra.instructions : null;
   const checkoutUrl = typeof state.extra?.checkoutUrl === 'string' && HTTP_URL.test(state.extra.checkoutUrl) ? state.extra.checkoutUrl : null;
+  const payHref = typeof state.extra?.payHref === 'string' && state.extra.payHref.startsWith('/') && !state.extra.payHref.startsWith('//') ? state.extra.payHref : null;
   return (
     <form action={formAction} className="space-y-3" noValidate>
       <FormMessage state={state} />
@@ -107,6 +109,11 @@ export function ActionForm({ action, fields, hidden = {}, submitLabel, pendingLa
       {checkoutUrl ? (
         <p>
           <a href={checkoutUrl} className="font-semibold text-blue-800 underline" rel="noopener noreferrer">Continuer vers le paiement</a>
+        </p>
+      ) : null}
+      {payHref ? (
+        <p>
+          <a href={payHref} className="font-semibold text-blue-800 underline">Payer la facture</a>
         </p>
       ) : null}
       {Object.entries(hidden).map(([name, value]) => (

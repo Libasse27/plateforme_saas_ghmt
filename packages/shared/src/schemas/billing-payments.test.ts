@@ -9,6 +9,9 @@ import {
   positiveMoneyAmount,
   recordPaymentSchema,
   voidInvoiceSchema,
+  currencyScale,
+  forceCloseCashSessionSchema,
+  hasValidCurrencyScale,
 } from './index';
 
 const UUID = '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b';
@@ -83,9 +86,37 @@ describe('autres contrats de facturation et de caisse', () => {
     expect(createPriceListItemSchema.safeParse({ code: 'x y', label: 'a', category: 'inconnue', unitPrice: '1' }).success).toBe(false);
   });
 
-  it('exige un motif d’annulation', () => {
-    expect(voidInvoiceSchema.safeParse({ reason: 'ab' }).success).toBe(false);
-    expect(voidInvoiceSchema.safeParse({ reason: 'Erreur de saisie' }).success).toBe(true);
+  it('exige un code de motif d’annulation et borne le commentaire à 300 caractères', () => {
+    expect(voidInvoiceSchema.safeParse({}).success).toBe(false);
+    expect(voidInvoiceSchema.safeParse({ reasonCode: 'inconnu' }).success).toBe(false);
+    expect(voidInvoiceSchema.safeParse({ reasonCode: 'duplicate' }).success).toBe(true);
+    expect(voidInvoiceSchema.safeParse({ reasonCode: 'other', comment: 'x'.repeat(300) }).success).toBe(true);
+    expect(voidInvoiceSchema.safeParse({ reasonCode: 'other', comment: 'x'.repeat(301) }).success).toBe(false);
+  });
+
+  it('exige une session de caisse pour un encaissement « other »', () => {
+    expect(recordPaymentSchema.safeParse({ method: 'other', amount: '1000' }).success).toBe(false);
+    expect(recordPaymentSchema.safeParse({ method: 'other', amount: '1000', cashSessionId: UUID }).success).toBe(true);
+  });
+
+  it('valide l’échelle monétaire par devise (XOF entier, EUR à 2 décimales)', () => {
+    expect(currencyScale('XOF')).toBe(0);
+    expect(currencyScale('EUR')).toBe(2);
+    expect(hasValidCurrencyScale('1500.50', 'XOF')).toBe(false);
+    expect(hasValidCurrencyScale('1500.00', 'XOF')).toBe(true);
+    expect(hasValidCurrencyScale('1500', 'GNF')).toBe(true);
+    expect(hasValidCurrencyScale('1500.50', 'EUR')).toBe(true);
+  });
+
+  it('accepte le caractère sensible d’une prestation et son libellé d’impression', () => {
+    const parsed = createPriceListItemSchema.parse({ code: 'VIH', label: 'Test VIH', category: 'examen', unitPrice: '2000', isSensitive: true, printLabel: 'Examen' });
+    expect(parsed).toMatchObject({ isSensitive: true, printLabel: 'Examen' });
+    expect(createPriceListItemSchema.parse({ code: 'A', label: 'Acte', category: 'acte', unitPrice: '1' }).isSensitive).toBe(false);
+  });
+
+  it('valide la clôture contradictoire', () => {
+    expect(forceCloseCashSessionSchema.safeParse({ countedAmount: '100', reason: 'ab' }).success).toBe(false);
+    expect(forceCloseCashSessionSchema.safeParse({ countedAmount: '100', reason: 'Caissier absent' }).success).toBe(true);
   });
 
   it('valide l’ouverture et la clôture de caisse', () => {

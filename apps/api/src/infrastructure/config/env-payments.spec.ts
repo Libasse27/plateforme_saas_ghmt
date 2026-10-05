@@ -12,10 +12,11 @@ const BASE = {
 };
 
 describe('loadEnv : paiements', () => {
-  it('active le sandbox par défaut hors production et laisse CinetPay inactif', () => {
+  it('désactive le sandbox par défaut (activation explicite en dev/test) et laisse CinetPay inactif', () => {
     const env = loadEnv(BASE);
 
-    expect(env.PAYMENTS_SANDBOX_ENABLED).toBe(true);
+    expect(env.PAYMENTS_SANDBOX_ENABLED).toBe(false);
+    expect(loadEnv({ ...BASE, PAYMENTS_SANDBOX_ENABLED: 'true' }).PAYMENTS_SANDBOX_ENABLED).toBe(true);
     expect(env.CINETPAY_API_KEY).toBeUndefined();
     expect(env.CINETPAY_BASE_URL).toBe('https://api-checkout.cinetpay.com/v2');
     expect(env.PAYMENTS_ROUTES).toEqual({});
@@ -29,7 +30,7 @@ describe('loadEnv : paiements', () => {
   });
 
   it('désactive le sandbox en production par défaut et refuse de l’activer explicitement', () => {
-    const production = { ...BASE, NODE_ENV: 'production', TRUSTED_PROXIES: '10.0.0.0/8' };
+    const production = { ...BASE, NODE_ENV: 'production', TRUSTED_PROXIES: '10.0.0.0/8', JWT_PLATFORM_SECRET: 'p'.repeat(40) };
 
     expect(loadEnv(production).PAYMENTS_SANDBOX_ENABLED).toBe(false);
     expect(() => loadEnv({ ...production, PAYMENTS_SANDBOX_ENABLED: 'true' })).toThrow(/PAYMENTS_SANDBOX_ENABLED/);

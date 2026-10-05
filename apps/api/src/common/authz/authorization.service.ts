@@ -13,16 +13,27 @@ import type {
  * permission présente, MFA exigée par un rôle. Toutes les permissions requises doivent être détenues.
  */
 /**
- * Écritures qui restent autorisées quand le tenant est suspendu (continuité des soins, docs/05 A6 et docs/09 §A3) :
- * enregistrer un patient (urgence) et encaisser. L'ouverture de caisse est nécessaire à l'encaissement en espèces.
+ * Écritures qui restent autorisées quand le tenant est en mode « continuité » (suspendu, résilié ou expiré ; docs/05 A6,
+ * docs/09 §A3 et §R) : enregistrer un patient (urgence), facturer, encaisser (sessions de caisse comprises) et mettre à jour
+ * un rendez-vous (arrivée du patient). Règle durable : un impayé ne bloque jamais l'accueil, la facturation ni la saisie clinique.
  */
-const SUSPENDED_ALLOWED_WRITES: ReadonlySet<string> = new Set(['patients:patient:create', 'cashier:payment:create', 'cashier:cash_session:create']);
+const SUSPENDED_ALLOWED_WRITES: ReadonlySet<string> = new Set([
+  'patients:patient:create',
+  'billing:invoice:create',
+  'cashier:payment:create',
+  'cashier:cash_session:create',
+  'cashier:cash_session:validate',
+  'appointments:appointment:update',
+]);
 
 /** Actions sans effet sur les données : permises en suspension (l'administrateur doit pouvoir exporter et imprimer). */
 const SUSPENDED_ALLOWED_ACTIONS: ReadonlySet<string> = new Set(['read', 'print', 'export']);
 
-/** Actions administratives non essentielles bloquées en période de grâce : création/invitation d'utilisateurs et exports. */
+/** Actions administratives non essentielles bloquées en période de grâce : création/invitation d'utilisateurs et exports de masse. */
 const GRACE_BLOCKED_PERMISSIONS: ReadonlySet<string> = new Set(['iam:user:create', 'iam:invitation:create']);
+
+/** Exports relevant des droits du patient (accès et portabilité) : jamais bloqués par un impayé. */
+const GRACE_ALLOWED_EXPORTS: ReadonlySet<string> = new Set(['patients:patient:export', 'consultations:medical_record:export']);
 
 function isRestrictedInSuspension(permission: PermissionKey): boolean {
   const action = permission.slice(permission.lastIndexOf(':') + 1);
@@ -30,6 +41,7 @@ function isRestrictedInSuspension(permission: PermissionKey): boolean {
 }
 
 function isBlockedInGrace(permission: PermissionKey): boolean {
+  if (GRACE_ALLOWED_EXPORTS.has(permission)) return false;
   return GRACE_BLOCKED_PERMISSIONS.has(permission) || permission.endsWith(':export');
 }
 

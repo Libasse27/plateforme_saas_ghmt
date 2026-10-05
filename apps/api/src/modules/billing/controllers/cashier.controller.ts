@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/com
 import {
   closeCashSessionSchema,
   createCashRegisterSchema,
+  forceCloseCashSessionSchema,
   listCashSessionsSchema,
   openCashSessionSchema,
   validateCashSessionSchema,
@@ -9,6 +10,7 @@ import {
   type CashSessionView,
   type CloseCashSessionInput,
   type CreateCashRegisterInput,
+  type ForceCloseCashSessionInput,
   type ListCashSessionsInput,
   type OpenCashSessionInput,
   type ValidateCashSessionInput,
@@ -63,6 +65,14 @@ export class CashierController {
   @RequirePermission('cashier:cash_session:create')
   close(@Param('id', UuidPipe) id: string, @Body(new ZodValidationPipe(closeCashSessionSchema)) body: CloseCashSessionInput): Promise<CashSessionView> {
     return this.sessions.close(id, body);
+  }
+
+  /** Clôture contradictoire par un tiers habilité (jamais l'ouvreur). */
+  @Post('sessions/:id/force-close')
+  @HttpCode(200)
+  @RequirePermission('cashier:cash_session:validate')
+  forceClose(@Param('id', UuidPipe) id: string, @Body(new ZodValidationPipe(forceCloseCashSessionSchema)) body: ForceCloseCashSessionInput): Promise<CashSessionView> {
+    return this.sessions.forceClose(id, body);
   }
 
   @Post('sessions/:id/validate')

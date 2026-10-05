@@ -8,7 +8,7 @@ import { TextField } from '@/components/ui/Field';
 import { FormMessage } from '@/components/ui/FormMessage';
 import { SubmitButton } from '@/components/ui/SubmitButton';
 import { EMPTY_FORM_STATE } from '@/lib/forms';
-import { formatMoney } from '@/lib/domain/money';
+import { formatMoney, isZeroDecimalCurrency } from '@/lib/domain/money';
 
 type Method = 'cash' | 'mobile_money' | 'other';
 
@@ -33,7 +33,8 @@ export function PaymentForm({ invoiceId, currency, balance, cashSessionId, canSe
   const [state, formAction] = useActionState(recordPaymentAction, EMPTY_FORM_STATE);
   const [method, setMethod] = useState<Method>(cashSessionId ? 'cash' : 'mobile_money');
   const errors = state.fieldErrors ?? {};
-  const cashBlocked = method === 'cash' && !cashSessionId;
+  const cashBlocked = (method === 'cash' || method === 'other') && !cashSessionId;
+  const zeroDecimal = isZeroDecimalCurrency(currency);
 
   return (
     <form action={formAction} className="space-y-4" noValidate>
@@ -60,9 +61,9 @@ export function PaymentForm({ invoiceId, currency, balance, cashSessionId, canSe
         name="amount"
         label={`Montant (${currency})`}
         required
-        inputMode="decimal"
-        defaultValue={state.values?.amount ?? balance.replace(/\.00$/, '')}
-        hint={`Reste dû : ${formatMoney(balance, currency)}`}
+        inputMode={zeroDecimal ? 'numeric' : 'decimal'}
+        defaultValue={state.values?.amount ?? balance.replace(/\.\d+$/, '')}
+        hint={`Reste dû : ${formatMoney(balance, currency)}${zeroDecimal ? '. Montant entier, sans décimales.' : ''}`}
         error={errors.amount}
       />
 
@@ -76,9 +77,9 @@ export function PaymentForm({ invoiceId, currency, balance, cashSessionId, canSe
       {cashBlocked ? (
         <Alert tone="warning">
           {canSeeCashier ? (
-            <>Vous devez ouvrir une session de caisse avant d&apos;encaisser en espèces. <Link href="/caisse" className="font-semibold underline">Aller à la caisse</Link></>
+            <>Vous devez ouvrir une session de caisse avant d&apos;encaisser (espèces, chèque, virement…). <Link href="/caisse" className="font-semibold underline">Aller à la caisse</Link></>
           ) : (
-            <>Aucune session de caisse ouverte pour vous. Demandez l&apos;accès à la caisse pour encaisser en espèces.</>
+            <>Aucune session de caisse ouverte pour vous. Demandez l&apos;accès à la caisse pour encaisser en espèces ou par un autre mode.</>
           )}
         </Alert>
       ) : null}

@@ -44,11 +44,11 @@ function sumQuantities(left: string, right: string): string {
   return `${(total / 1000n).toString()}${fraction ? `.${fraction}` : ''}`;
 }
 
-export function addFreeLine(lines: readonly DraftLine[], input: FreeLineInput, key: string): DraftResult {
+export function addFreeLine(lines: readonly DraftLine[], input: FreeLineInput, key: string, currency?: string): DraftResult {
   const description = input.description.trim();
   if (description.length < 2) return { ok: false, error: 'Le libellé doit comporter au moins 2 caractères.' };
   if (!(ITEM_CATEGORIES as readonly string[]).includes(input.category)) return { ok: false, error: 'Choisissez une catégorie.' };
-  const price = parseMoneyInput(input.unitPrice);
+  const price = parseMoneyInput(input.unitPrice, currency);
   if (!price.ok) return { ok: false, error: price.error };
   const quantity = parseQuantityInput(input.quantity);
   if (!quantity.ok) return { ok: false, error: quantity.error };
@@ -62,8 +62,8 @@ export function removeLine(lines: readonly DraftLine[], key: string): DraftLine[
   return lines.filter((line) => line.key !== key);
 }
 
-export function draftTotal(lines: readonly DraftLine[]): string {
-  return lines.length === 0 ? sumAmounts([]) : invoiceTotals(lines);
+export function draftTotal(lines: readonly DraftLine[], currency?: string): string {
+  return lines.length === 0 ? sumAmounts([]) : invoiceTotals(lines, currency);
 }
 
 /** JSON du champ caché relu par `parseDraftLines` côté serveur (le serveur revalide tout). */

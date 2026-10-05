@@ -25,7 +25,11 @@ export async function changePlanAction(_prev: FormState, formData: FormData): Pr
     const result = toChangePlanResult((await actionApi('/subscription/change', { method: 'POST', body: parsed.data })).data);
     const { tenant } = await currentMe();
     refreshSubscriptionViews();
-    return { ok: true, message: changeResultMessage(result, tenant.timezone) };
+    return {
+      ok: true,
+      message: changeResultMessage(result, tenant.timezone),
+      ...(result.effect === 'pending_payment' ? { extra: { payHref: `${SUBSCRIPTION_PATH}#factures` } } : {}),
+    };
   } catch (error) {
     return failureState(error);
   }

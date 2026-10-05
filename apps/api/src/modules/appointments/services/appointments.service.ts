@@ -34,6 +34,17 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const RESCHEDULABLE: readonly AppointmentStatus[] = ['scheduled', 'confirmed'];
 const CURSOR_SEPARATOR = '|';
 
+/** Sources acceptées par le realm personnel : le guichet et le téléphone. `web` / `mobile_app` sont réservées aux futurs canaux patient. */
+const PERSONNEL_SOURCES: readonly string[] = ['front_desk', 'phone'];
+
+/** La source ne doit pas être fiée au corps : un agent ne peut pas se faire passer pour un canal en ligne. */
+function assertPersonnelSource(source: string): void {
+  if (PERSONNEL_SOURCES.includes(source)) return;
+  throw DomainError.validation([{ path: 'source', code: 'source_not_allowed', message: 'Source non autorisée : seules « front_desk » et « phone » sont acceptées.' }]);
+}
+
+const monthKeyOf = (date: Date): string => `${date.getUTCFullYear()}-${date.getUTCMonth()}`;
+
 @Injectable()
 export class AppointmentsService {
   constructor(
@@ -47,6 +58,7 @@ export class AppointmentsService {
 
   create(input: CreateAppointmentInput): Promise<AppointmentView> {
     const { tenantId, userId } = this.context.requirePrincipal();
+    assertPersonnelSource(input.source);
     const scope = this.scopeOf('appointments:appointment:create');
     return this.db.run(async (tx) => {
       const practitioner = await this.repo.findPractitioner(tx, tenantId, input.practitionerId);
@@ -146,6 +158,10 @@ export class AppointmentsService {
       await this.requirePatientInScope(tx, tenantId, current);
       assertPatientAlive(current.patient);
       assertSlotNotInPast(new Date(input.startsAt), this.clock.now());
+      // Un déplacement vers un autre mois consomme le quota de ce mois : même contrôle qu'à la création.
+      if (monthKeyOf(current.startsAt) !== monthKeyOf(new Date(input.startsAt))) {
+        await this.entitlements.assertAppointmentAllowed(tx, { source: current.source, startsAt: new Date(input.startsAt) });
+      }
       const count = await this.repo.updateGuarded(tx, tenantId, id, current.status, {
         startsAt: new Date(input.startsAt),
         endsAt: new Date(input.endsAt),

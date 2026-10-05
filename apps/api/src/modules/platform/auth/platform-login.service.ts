@@ -23,7 +23,7 @@ type MfaOutcome = { kind: 'ok'; tokens: PlatformTokens } | { kind: 'rejected' };
 
 /**
  * Connexion du realm plateforme (docs/09 §A1) : mot de passe Argon2id, verrouillage progressif, MFA TOTP OBLIGATOIRE.
- * Sans second facteur enrôlé, la session ouverte est limitée à l'enrôlement ; avec un facteur, un challenge est émis.
+ * Sans second facteur enrôlé (enrôlement par le script CLI uniquement), la connexion est refusée (403) ; sinon un challenge est émis.
  * Les échecs sont validés en base (compteur, audit) avant que l'erreur 401 ne soit levée.
  */
 @Injectable()
@@ -51,20 +51,24 @@ export class PlatformLoginService {
       throw DomainError.invalidCredentials();
     }
 
+    // Sans second facteur enrôlé (par le script CLI), aucune session n'est ouverte : lire le mot de passe ne suffit jamais à
+    // prendre un compte jamais enrôlé (revue sécurité M2). Le refus est audité et validé avant l'erreur.
+    if (!user.mfaActivatedAt) {
+      await this.platformDb.run((tx) =>
+        this.audit.record(tx, {
+          action: 'platform.auth.login_refused',
+          actor: { type: 'platform_user', userId: user.id, role: user.role },
+          outcome: 'denied',
+          changes: { reason: 'mfa_not_enrolled' },
+        }),
+      );
+      throw DomainError.forbidden('mfa_enrollment_required_cli', 'Second facteur non enrôlé : demandez l’enrôlement par le script d’administration.');
+    }
+
     const rehash = this.passwords.needsRehash(user.passwordHash) ? await this.passwords.hash(input.password) : undefined;
     return this.platformDb.run(async (tx) => {
       if (rehash) await tx.platformUser.update({ where: { id: user.id }, data: { passwordHash: rehash } });
-      if (user.mfaActivatedAt) return this.createChallenge(tx, user.id, now);
-      await tx.platformUser.update({ where: { id: user.id }, data: { failedAttempts: 0, lockedUntil: null, lastLoginAt: now } });
-      const tokens = await this.sessions.open(tx, { userId: user.id, role: user.role, mfaVerified: false, mfaEnrolled: false, now });
-      await this.audit.record(tx, {
-        action: 'platform.auth.login',
-        actor: { type: 'platform_user', userId: user.id, role: user.role },
-        resourceType: 'platform_session',
-        resourceId: tokens.sessionId,
-        changes: { method: 'password', mfa: false },
-      });
-      return stripSession(tokens);
+      return this.createChallenge(tx, user.id, now);
     });
   }
 

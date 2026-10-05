@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { entitlementsSchema, type BillingPeriod, type DowngradeViolation, type EntitlementOverrides } from '@ghmt/shared';
+import { TRIAL_SELECTABLE_PLAN_CODES, entitlementsSchema, type BillingPeriod, type DowngradeViolation, type EntitlementOverrides } from '@ghmt/shared';
 import { PlatformAuditService, type PlatformActor } from '../../../common/audit/platform-audit.service';
 import { DomainError } from '../../../common/errors/domain-error';
 import { Prisma, type Plan, type SaasInvoice, type Subscription } from '../../../generated/prisma/client';
@@ -41,7 +41,8 @@ function monthlyMinor(plan: Plan): bigint {
 /**
  * Changement de plan (docs/09 §A3, docs/05 A8) :
  * - essai : le plan change immédiatement et la facture de conversion est émise ;
- * - upgrade (actif, impayé, grâce) : immédiat, facture de prorata, droits et modules relevés ;
+ * - upgrade (actif, impayé, grâce) : facture de prorata, plan appliqué AU RÈGLEMENT de cette facture (effet `pending_payment`) ;
+ *   la console plateforme, elle, l'applique tout de suite ;
  * - downgrade ou changement de périodicité : planifié en fin de période après contrôle de compatibilité (409 sinon) ;
  * - réactivation (expiré, suspendu, résilié) : facture de conversion, plan appliqué au paiement.
  */
@@ -157,6 +158,10 @@ export class PlanChangeService {
     ctx: { request: PlanChangeRequest; subscription: Subscription; target: Plan },
   ) {
     const { request, subscription, target } = ctx;
+    // L'essai ne donne accès qu'aux offres basic et standard ; les offres supérieures s'obtiennent après la conversion.
+    if (!request.platform && !(TRIAL_SELECTABLE_PLAN_CODES as readonly string[]).includes(target.tier)) {
+      throw DomainError.conflict('plan_not_allowed_in_trial', 'Cette offre n’est pas disponible pendant l’essai : choisissez Basic ou Standard.');
+    }
     await this.issuer.voidOpenRecurring(tx, subscription, request.now, request.actor, 'plan_change');
     const updated = await tx.subscription.update({
       where: { id: subscription.id },
@@ -199,20 +204,20 @@ export class PlanChangeService {
 
   private async upgrade(tx: PlatformTx, ctx: { request: PlanChangeRequest; subscription: Subscription; current: Plan; target: Plan }) {
     const { request, subscription, current, target } = ctx;
+    await this.issuer.voidOpenProrata(tx, subscription, request.now, request.actor, 'plan_change_superseded');
     const prorata = await this.issuer.issueProrata(tx, { subscription, from: current, to: target, now: request.now, actor: request.actor });
     await this.issuer.voidOpenRecurring(tx, subscription, request.now, request.actor, 'plan_change');
     const periodChanges = request.billingPeriod !== subscription.billingPeriod;
+    // Une périodicité différente s'applique au prochain renouvellement (le prorata est calculé sur la période en cours).
+    const pendingBillingPeriod = periodChanges ? request.billingPeriod : null;
+    // Plan appliqué tout de suite : prorata nul (rien à payer) ou décision de la console plateforme.
+    const immediate = prorata === null || request.platform !== undefined;
     const updated = await tx.subscription.update({
       where: { id: subscription.id },
-      data: {
-        planId: target.id,
-        pendingPlanId: null,
-        // Une périodicité différente s'applique au prochain renouvellement (le prorata est calculé sur la période en cours).
-        pendingBillingPeriod: periodChanges ? request.billingPeriod : null,
-      },
+      data: immediate ? { planId: target.id, pendingPlanId: null, pendingBillingPeriod } : { pendingPlanId: target.id, pendingBillingPeriod },
     });
     await this.reissueIfDue(tx, updated, request);
-    return { effect: 'immediate' as const, invoice: prorata, changes: [] as StatusChange[] };
+    return { effect: immediate ? ('immediate' as const) : ('pending_payment' as const), invoice: prorata, changes: [] as StatusChange[] };
   }
 
   private async scheduleChange(tx: PlatformTx, ctx: { request: PlanChangeRequest; subscription: Subscription; current: Plan; target: Plan }) {
@@ -249,7 +254,7 @@ export class PlanChangeService {
   /** Utilisateurs et sites actuels doivent tenir dans le plan cible, sinon 409 avec la liste des dépassements. */
   private async assertDowngradeCompatible(tx: PlatformTx, tenantId: string, target: Plan, now: Date): Promise<void> {
     const limits = entitlementsSchema.parse(target.entitlements).limits;
-    const [usage] = await this.repository.usageOf(tx, [tenantId], now);
+    const [usage] = await this.repository.usageOf(tx, [tenantId]);
     const violations: DowngradeViolation[] = [];
     if (usage && limits.users !== null && usage.users > limits.users) violations.push({ metric: 'users', limit: limits.users, current: usage.users });
     if (usage && limits.sites !== null && usage.sites > limits.sites) violations.push({ metric: 'sites', limit: limits.sites, current: usage.sites });

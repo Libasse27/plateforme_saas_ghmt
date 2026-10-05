@@ -23,6 +23,13 @@ const MFA_CODE_SEPARATORS = /[\s-]/g;
 const UNEXPECTED = 'Réponse inattendue du serveur. Veuillez réessayer.';
 const INVALID_LOGIN = 'E-mail ou mot de passe invalide.';
 const INVALID_CODE = 'Code invalide ou expiré.';
+const ENROLMENT_BY_OPERATIONS = 'L\'enrôlement du second facteur est réalisé par l\'équipe d\'exploitation : contactez-la pour activer ce compte.';
+
+/** Enrôlement web retiré côté API (403/404) : message clair plutôt qu'une erreur générique. */
+function enrolmentFailure(error: unknown): FormState {
+  if (isApiError(error) && (error.status === 403 || error.status === 404)) return { ok: false, message: ENROLMENT_BY_OPERATIONS };
+  return failureState(error);
+}
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
@@ -93,7 +100,7 @@ export async function startPlatformTotpSetupAction(): Promise<FormState> {
     if (!setup) return { ok: false, message: UNEXPECTED };
     return { ok: true, extra: { qrDataUrl: setup.qrDataUrl, secret: setup.secret } };
   } catch (error) {
-    return failureState(error);
+    return enrolmentFailure(error);
   }
 }
 
@@ -112,7 +119,7 @@ export async function activatePlatformTotpAction(_prev: FormState, formData: For
     return { ok: true, message: 'Authentification à deux facteurs activée.', extra: { backupCodes: backupCodesOf(data) } };
   } catch (error) {
     if (isApiError(error) && error.code === 'invalid_code') return { ok: false, message: INVALID_CODE, fieldErrors: { code: INVALID_CODE } };
-    return failureState(error);
+    return enrolmentFailure(error);
   }
 }
 

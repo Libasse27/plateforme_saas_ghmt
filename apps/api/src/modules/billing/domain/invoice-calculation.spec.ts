@@ -14,6 +14,12 @@ describe('calcul des lignes de facture', () => {
     expect(formatMoney(computeLine('1.333', parseMoney('10.00')).lineTotal)).toBe('13.33');
   });
 
+  it('arrondit à l’unité pour une devise sans subdivision (moitié vers le haut)', () => {
+    expect(formatMoney(computeLine('0.5', parseMoney('1001'), 0).lineTotal)).toBe('501.00');
+    expect(formatMoney(computeLine('1.333', parseMoney('1000'), 0).lineTotal)).toBe('1333.00');
+    expect(formatMoney(computeLine('0.4', parseMoney('1001'), 0).lineTotal)).toBe('400.00');
+  });
+
   it('ne subit aucune erreur de flottant (0.1 × 3)', () => {
     expect(formatMoney(computeLine('3', parseMoney('0.10')).lineTotal)).toBe('0.30');
   });

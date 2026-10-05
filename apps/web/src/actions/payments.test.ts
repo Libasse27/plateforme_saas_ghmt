@@ -5,7 +5,7 @@ vi.mock('next/navigation', async () => (await import('./test-kit')).navigationMo
 vi.mock('next/cache', async () => (await import('./test-kit')).cacheMock());
 vi.mock('next/headers', async () => (await import('./test-kit')).headersMock());
 
-import { recordPaymentAction, refreshPaymentAction, simulateSandboxPaymentAction } from './payments';
+import { abandonPaymentAction, recordPaymentAction, refreshPaymentAction, simulateSandboxPaymentAction } from './payments';
 import { form, redirectOf, stubApi } from './test-kit';
 
 const INVOICE = '6c2b8c1e-1a2b-4c3d-8e9f-0123456789ab';
@@ -40,13 +40,38 @@ describe('recordPaymentAction : espèces et autre mode', () => {
 
   it('enregistre un autre mode avec sa référence', async () => {
     const { calls } = stubApi(() => okEnvelope({ ...CASH_PAYMENT, method: 'other' }, {}, 201));
-    await recordPaymentAction({}, form({ invoiceId: INVOICE, method: 'other', amount: '5000', reference: 'CHQ-0042' }));
-    expect(calls.at(-1)?.body).toEqual({ method: 'other', amount: '5000.00', reference: 'CHQ-0042' });
+    await recordPaymentAction({}, form({ invoiceId: INVOICE, method: 'other', amount: '5000', reference: 'CHQ-0042', cashSessionId: SESSION }));
+    expect(calls.at(-1)?.body).toEqual({ method: 'other', amount: '5000.00', reference: 'CHQ-0042', cashSessionId: SESSION });
+  });
+
+  it('R9 : le mode « autre » exige une session de caisse ouverte (aucun appel)', async () => {
+    const { calls } = stubApi(() => undefined);
+    const state = await recordPaymentAction({}, form({ invoiceId: INVOICE, method: 'other', amount: '5000', reference: 'CHQ-0042' }));
+    expect(state.fieldErrors?.cashSessionId).toContain('session de caisse');
+    expect(calls.some((c) => c.path.endsWith('/payments'))).toBe(false);
+  });
+
+  it('R9 : cash_register_site_mismatch', async () => {
+    stubApi(() => problem(422, 'cash_register_site_mismatch'));
+    const state = await recordPaymentAction({}, form({ invoiceId: INVOICE, method: 'cash', amount: '100', cashSessionId: SESSION }));
+    expect(state.message).toContain('même site');
+  });
+
+  it('R7 : montant avec décimales refusé en FCFA, amount_scale et payment_provider_unavailable expliqués', async () => {
+    const { calls } = stubApi(() => problem(422, 'amount_scale'));
+    const refused = await recordPaymentAction({}, form({ invoiceId: INVOICE, method: 'cash', amount: '100,5', cashSessionId: SESSION, currency: 'XOF' }));
+    expect(refused.fieldErrors?.amount).toContain('sans décimales');
+    expect(calls.some((c) => c.path.endsWith('/payments'))).toBe(false);
+    const scale = await recordPaymentAction({}, form({ invoiceId: INVOICE, method: 'cash', amount: '100', cashSessionId: SESSION, currency: 'XOF' }));
+    expect(scale.message).toContain('sans décimales');
+    stubApi(() => problem(503, 'payment_provider_unavailable'));
+    const down = await recordPaymentAction({}, form({ invoiceId: INVOICE, method: 'mobile_money', amount: '100', payerPhone: '77 123 45 67' }));
+    expect(down.message).toContain('fournisseur de paiement');
   });
 
   it('amount_exceeds_balance affiche le reste dû', async () => {
     stubApi(() => problem(422, 'amount_exceeds_balance', { details: { balance: '2500.00' } }));
-    const state = await recordPaymentAction({}, form({ invoiceId: INVOICE, method: 'other', amount: '9000', reference: 'x', currency: 'XOF' }));
+    const state = await recordPaymentAction({}, form({ invoiceId: INVOICE, method: 'other', amount: '9000', reference: 'x', currency: 'XOF', cashSessionId: SESSION }));
     expect(state.ok).toBe(false);
     expect(state.message).toContain(`2${NBSP}500${NBSP}FCFA`);
   });
@@ -157,5 +182,28 @@ describe('simulateSandboxPaymentAction', () => {
   it('erreur API (sandbox désactivé) : message en français', async () => {
     stubApi(() => problem(404, 'not_found'));
     expect((await simulateSandboxPaymentAction({}, form({ providerReference: REF, outcome: 'success' }))).message).toContain('introuvable');
+  });
+});
+
+describe('abandonPaymentAction (R4)', () => {
+  it('paiement annulé', async () => {
+    const { calls } = stubApi(() => okEnvelope({ status: 'cancelled' }));
+    const state = await abandonPaymentAction({}, form({ paymentId: PAYMENT, invoiceId: INVOICE }));
+    expect(state).toMatchObject({ ok: true });
+    expect(state.message).toContain('abandonné');
+    expect(calls.at(-1)).toMatchObject({ path: `/billing/payments/${PAYMENT}/abandon` });
+  });
+  it('paiement finalement réglé', async () => {
+    stubApi(() => okEnvelope({ status: 'succeeded' }));
+    const state = await abandonPaymentAction({}, form({ paymentId: PAYMENT, invoiceId: INVOICE }));
+    expect(state.ok).toBe(true);
+    expect(state.message).toContain('finalement été confirmé');
+  });
+  it('statut inattendu, identifiants invalides et erreur API', async () => {
+    stubApi(() => okEnvelope({ status: 'pending' }));
+    expect((await abandonPaymentAction({}, form({ paymentId: PAYMENT, invoiceId: INVOICE }))).ok).toBe(false);
+    expect((await abandonPaymentAction({}, form({ paymentId: 'x', invoiceId: INVOICE }))).ok).toBe(false);
+    stubApi(() => problem(403, 'forbidden'));
+    expect((await abandonPaymentAction({}, form({ paymentId: PAYMENT, invoiceId: INVOICE }))).ok).toBe(false);
   });
 });

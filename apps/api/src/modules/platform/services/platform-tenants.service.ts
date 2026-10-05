@@ -83,7 +83,7 @@ export class PlatformTenantsService {
       const tenant = await tx.tenant.findFirst({ where: { id: tenantId, deletedAt: null } });
       if (!tenant) throw DomainError.notFound('Établissement');
       const subscription = await this.subscriptions.viewIn(tx, tenantId, now);
-      const [usage] = await this.repository.usageOf(tx, [tenantId], now);
+      const [usage] = await this.repository.usageOf(tx, [tenantId]);
       const modules = await tx.tenantModule.findMany({ where: { tenantId, disabledAt: null }, select: { moduleCode: true }, orderBy: { moduleCode: 'asc' } });
       const [open, overdue] = await Promise.all([
         tx.saasInvoice.count({ where: { tenantId, status: 'open' } }),

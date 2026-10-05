@@ -4,16 +4,17 @@ import { Prisma } from '../../../generated/prisma/client';
 import { DomainError, type FieldIssue } from '../../../common/errors/domain-error';
 import { FieldCrypto } from '../../../common/crypto/field-crypto.service';
 import { moneyEquals, parseMoney } from '../../../common/money/money';
-import type {
-  InitiatePaymentInput,
-  InitiatedPayment,
-  PaymentAttemptStatus,
-  PaymentsGateway,
+import {
+  PaymentProviderUnavailableError,
+  type InitiatePaymentInput,
+  type InitiatedPayment,
+  type PaymentAttemptStatus,
+  type PaymentsGateway,
 } from '../../../common/payments/payments-gateway';
 import { isUuid } from '../../../common/pipes/uuid.pipe';
 import { ENV, type Env } from '../../../infrastructure/config/env';
 import { PlatformDb } from '../../../infrastructure/prisma/platform-db.service';
-import type { PaymentProvider } from '../domain/payment-provider';
+import { ProviderError, type PaymentProvider } from '../domain/payment-provider';
 import { resolveProviderOrder } from '../domain/payment-router';
 import { FAILURE_REASONS } from '../payments.constants';
 import { ProviderRegistry } from '../providers/provider-registry';
@@ -28,7 +29,6 @@ const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
 const MAX_DESCRIPTION_LENGTH = 200;
 const REFERENCE_PREFIX = 'GH';
 const REFERENCE_RANDOM_BYTES = 11;
-const BAD_GATEWAY = 502;
 const SERVICE_UNAVAILABLE = 503;
 
 /** Implémentation du contrat `PaymentsGateway` : tentatives, routage, repli de fournisseur, idempotence. */
@@ -53,8 +53,10 @@ export class PaymentsGatewayService implements PaymentsGateway {
 
     const candidates = await this.candidates(input);
     if (candidates.length === 0) {
-      throw new DomainError('no_payment_provider', SERVICE_UNAVAILABLE, 'Service Unavailable', 'Aucun fournisseur de paiement disponible pour cette demande.');
+      throw new PaymentProviderUnavailableError(null, false, SERVICE_UNAVAILABLE);
     }
+    // Une seule tentative en attente par facture SaaS : une nouvelle demande abandonne la précédente (un succès tardif reste enregistrable).
+    if (input.purpose === 'saas_invoice') await this.abandonPendingSiblings(input);
     const providerReference = `${REFERENCE_PREFIX}${randomBytes(REFERENCE_RANDOM_BYTES).toString('hex')}`;
     const attempt = await this.createAttempt(input, amount, candidates[0]!.code, providerReference);
     if (attempt.replayOf) return this.replay(attempt.replayOf, input, amount);
@@ -71,8 +73,15 @@ export class PaymentsGatewayService implements PaymentsGateway {
     } catch (error: unknown) {
       if (error instanceof DomainError) throw error;
       this.logger.warn({ attemptId, provider: attempt.provider }, 'Re-vérification impossible auprès du fournisseur');
-      throw new DomainError('payment_provider_unavailable', BAD_GATEWAY, 'Bad Gateway', 'Le fournisseur de paiement est momentanément injoignable.');
+      throw new PaymentProviderUnavailableError(attemptId, true);
     }
+  }
+
+  async cancel(attemptId: string): Promise<{ readonly status: PaymentAttemptStatus }> {
+    if (!isUuid(attemptId)) throw DomainError.notFound('Tentative de paiement');
+    const attempt = await this.db.run((tx) => this.repo.findById(tx, attemptId));
+    if (!attempt) throw DomainError.notFound('Tentative de paiement');
+    return { status: await this.settlement.cancel(attempt) };
   }
 
   private validate(input: InitiatePaymentInput): void {
@@ -92,6 +101,11 @@ export class PaymentsGatewayService implements PaymentsGateway {
     );
     check(input.payerPhone === undefined || PHONE_PATTERN.test(input.payerPhone), 'payerPhone', 'Téléphone au format E.164 attendu.');
     if (issues.length > 0) throw DomainError.validation(issues);
+  }
+
+  private async abandonPendingSiblings(input: InitiatePaymentInput): Promise<void> {
+    const siblings = await this.db.run((tx) => this.repo.listPendingFor(tx, input.tenantId, input.purpose, input.referenceId));
+    for (const sibling of siblings) await this.settlement.cancel(sibling);
   }
 
   /** Fournisseurs actifs et compétents, dans l'ordre du routage pays/devise. */
@@ -129,13 +143,15 @@ export class PaymentsGatewayService implements PaymentsGateway {
     } catch (error: unknown) {
       if ((error as { code?: string }).code !== 'P2002') throw error;
       const winner = await this.db.run((tx) => this.repo.findByIdempotencyKey(tx, input.idempotencyKey));
-      if (!winner) throw error;
+      // Autre violation d'unicité : une tentative concurrente est déjà en attente pour cette facture SaaS.
+      if (!winner) throw DomainError.conflict('payment_already_pending', 'Un paiement est déjà en cours pour cette facture.');
       return { replayOf: winner };
     }
   }
 
   /** Crée le paiement chez le premier fournisseur qui répond ; repli sur les suivants. */
   private async startCheckout(attempt: PaymentAttemptRow, input: InitiatePaymentInput, candidates: readonly PaymentProvider[]): Promise<InitiatedPayment> {
+    let everyRefused = true;
     for (const provider of candidates) {
       try {
         const session = await provider.createCheckout({
@@ -149,11 +165,17 @@ export class PaymentsGatewayService implements PaymentsGateway {
         const updated = await this.db.run((tx) => this.repo.attachCheckout(tx, attempt.id, { provider: provider.code, ...session }));
         return this.toView(updated);
       } catch (error: unknown) {
-        this.logger.warn({ attemptId: attempt.id, provider: provider.code, error: error instanceof Error ? error.name : 'unknown' }, 'Création du paiement refusée par le fournisseur');
+        if (!(error instanceof ProviderError && error.kind === 'refused')) everyRefused = false;
+        this.logger.warn({ attemptId: attempt.id, provider: provider.code, error: error instanceof Error ? error.name : 'unknown' }, 'Création du paiement impossible chez le fournisseur');
       }
     }
-    await this.settlement.failSilently(attempt.id, FAILURE_REASONS.providerUnavailable);
-    throw new DomainError('payment_provider_unavailable', BAD_GATEWAY, 'Bad Gateway', 'Le fournisseur de paiement est momentanément injoignable.');
+    // Refus explicite de tous les fournisseurs : aucune transaction n'existe, la tentative échoue. Échec technique : l'état
+    // chez l'agrégateur est inconnu, la tentative reste « pending » et le job de relance l'interroge (docs/09 §R).
+    if (everyRefused) {
+      await this.settlement.failSilently(attempt, FAILURE_REASONS.refused);
+      throw new PaymentProviderUnavailableError(attempt.id, false);
+    }
+    throw new PaymentProviderUnavailableError(attempt.id, true);
   }
 
   private replay(existing: PaymentAttemptRow, input: InitiatePaymentInput, amount: Prisma.Decimal): InitiatedPayment {

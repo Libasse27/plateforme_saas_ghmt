@@ -25,7 +25,7 @@ export class PlatformDashboardService {
         tx.tenant.groupBy({ by: ['status'], where: { deletedAt: null }, _count: { _all: true } }),
         tx.subscription.count({ where: { status: 'trial' } }),
         tx.saasInvoice.count({ where: { status: 'open', dueAt: { lt: now } } }),
-        this.repository.usageOf(tx, null, now),
+        this.repository.usageOf(tx, null),
         tx.subscription.groupBy({ by: ['planId', 'billingPeriod'], where: { status: { in: [...REVENUE_STATUSES] } }, _count: { _all: true } }),
       ]);
       const plans = await tx.plan.findMany({ where: { id: { in: revenueGroups.map((g) => g.planId) } } });

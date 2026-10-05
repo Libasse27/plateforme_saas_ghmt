@@ -269,7 +269,7 @@ describe('platform : console (tenants, plans, abonnements, tableau de bord)', ()
 
       const res = await http(app)
         .post(`${PLATFORM}/subscriptions/${tenant.tenantId}/change`)
-        .set(bearer(billing.token))
+        .set(bearer(admin.token))
         .send({ planCode: 'professional', billingPeriod: 'yearly', overrides: { limits: { users: 7 }, features: { api: false } } })
         .expect(200);
 

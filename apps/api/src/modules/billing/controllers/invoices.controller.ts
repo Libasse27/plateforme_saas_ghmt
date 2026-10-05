@@ -6,6 +6,7 @@ import {
   replaceInvoiceLinesSchema,
   voidInvoiceSchema,
   type CreateInvoiceInput,
+  type AbandonPaymentView,
   type InvoiceDetailView,
   type InvoicePaymentView,
   type InvoiceSummaryView,
@@ -80,6 +81,14 @@ export class InvoicesController {
   @RequirePermission('cashier:payment:create')
   pay(@Param('id', UuidPipe) id: string, @Body(new ZodValidationPipe(recordPaymentSchema)) body: RecordPaymentInput): Promise<InvoicePaymentView | OnlinePaymentView> {
     return this.payments.record(id, body);
+  }
+
+  /** Abandon d'un paiement en ligne en attente : re-vérifie le fournisseur, libère le montant s'il n'y a pas eu de succès. */
+  @Post('payments/:id/abandon')
+  @HttpCode(200)
+  @RequirePermission('cashier:payment:create')
+  abandon(@Param('id', UuidPipe) id: string): Promise<AbandonPaymentView> {
+    return this.payments.abandon(id);
   }
 
   @Post('payments/:id/refresh')

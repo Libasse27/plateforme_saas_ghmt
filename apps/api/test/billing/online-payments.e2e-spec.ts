@@ -8,7 +8,21 @@ import { TenantDb } from '../../src/infrastructure/prisma/tenant-db.service';
 import { createPatientRow } from '../appointments/appointment-fixtures';
 import { createUserWithRole, type TenantFixture, type UserFixture } from '../helpers/fixtures';
 import { createTestApp } from '../helpers/test-app';
-import { BILLING, WEBHOOKS, auditActions, bearer, createBillingTenant, getInvoice, http, issuedInvoice, payMobile, seedCatalog, type Catalog } from './billing-fixtures';
+import {
+  BILLING,
+  WEBHOOKS,
+  auditActions,
+  bearer,
+  createBillingTenant,
+  createRegisterRow,
+  getInvoice,
+  http,
+  issuedInvoice,
+  openSessionOk,
+  payMobile,
+  seedCatalog,
+  type Catalog,
+} from './billing-fixtures';
 
 describe('encaissement Mobile Money via le fournisseur sandbox (HTTP)', () => {
   let app: INestApplication;
@@ -20,6 +34,7 @@ describe('encaissement Mobile Money via le fournisseur sandbox (HTTP)', () => {
   let cashier: UserFixture;
   let accountant: UserFixture;
   let foreignCashier: UserFixture;
+  let sessionId: string;
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -30,16 +45,17 @@ describe('encaissement Mobile Money via le fournisseur sandbox (HTTP)', () => {
     cashier = await createUserWithRole(app, a, 'cashier');
     accountant = await createUserWithRole(app, a, 'accountant');
     foreignCashier = await createUserWithRole(app, b, 'cashier');
+    sessionId = (await openSessionOk(app, cashier, await createRegisterRow(app, a))).id;
   });
 
   afterAll(async () => {
     await app?.close();
   });
 
-  const newInvoice = () => issuedInvoice(app, receptionist, a, patientId, catalog); // 8500.50
+  const newInvoice = () => issuedInvoice(app, receptionist, a, patientId, catalog); // 8500.00
   const simulate = (attemptId: string, outcome: 'success' | 'failure' = 'success') => http(app).post(`${WEBHOOKS}/sandbox/simulate`).send({ attemptId, outcome });
 
-  async function initiate(invoiceId: string, amount = '8500.50') {
+  async function initiate(invoiceId: string, amount = '8500.00') {
     const res = await payMobile(app, cashier, invoiceId, amount).expect(201);
     return res.body.data as { payment: { id: string; status: string; method: string; amount: string }; checkoutUrl: string | null; instructions: string | null };
   }
@@ -54,12 +70,12 @@ describe('encaissement Mobile Money via le fournisseur sandbox (HTTP)', () => {
 
     const online = await initiate(invoice.id);
 
-    expect(online.payment).toMatchObject({ method: 'mobile_money', status: 'pending', amount: '8500.50' });
+    expect(online.payment).toMatchObject({ method: 'mobile_money', status: 'pending', amount: '8500.00' });
     expect(online.checkoutUrl).toEqual(expect.stringContaining('/'));
     expect(online.instructions).toEqual(expect.any(String));
     expect(await getInvoice(app, cashier, invoice.id)).toMatchObject({ status: 'issued', amountPaid: '0.00' });
     const [entry] = await auditActions(app, a, 'payment.initiated', online.payment.id);
-    expect(entry?.changes).toMatchObject({ invoiceId: invoice.id, method: 'mobile_money', amount: '8500.50' });
+    expect(entry?.changes).toMatchObject({ invoiceId: invoice.id, method: 'mobile_money', amount: '8500.00' });
     expect(JSON.stringify(entry?.changes)).not.toContain('771234567');
   });
 
@@ -71,7 +87,7 @@ describe('encaissement Mobile Money via le fournisseur sandbox (HTTP)', () => {
     const attempt = await app.get(PlatformDb).run((tx) => tx.paymentAttempt.findUniqueOrThrow({ where: { id: attemptId } }));
 
     expect(attempt).toMatchObject({ purpose: 'patient_invoice', tenantId: a.tenantId, referenceId: invoice.id, currency: 'XOF', channel: 'mobile_money' });
-    expect(attempt.amount.toFixed(2)).toBe('8500.50');
+    expect(attempt.amount.toFixed(2)).toBe('8500.00');
     expect(attempt.description).toMatch(/^Facture FAC-/);
     expect(JSON.stringify(attempt)).not.toContain('771234567');
     expect(attempt.payerPhoneHash).toMatch(/^[0-9a-f]{64}$/);
@@ -85,7 +101,7 @@ describe('encaissement Mobile Money via le fournisseur sandbox (HTTP)', () => {
 
     expect(res.body.data.outcome).toBe('succeeded');
     const after = await getInvoice(app, cashier, invoice.id);
-    expect(after).toMatchObject({ status: 'paid', amountPaid: '8500.50', balance: '0.00' });
+    expect(after).toMatchObject({ status: 'paid', amountPaid: '8500.00', balance: '0.00' });
     expect(after.payments).toHaveLength(1);
     expect(after.payments[0]).toMatchObject({ id: online.payment.id, status: 'succeeded', method: 'mobile_money', cashSessionId: null });
     const [entry] = await auditActions(app, a, 'payment.succeeded', online.payment.id);
@@ -97,7 +113,7 @@ describe('encaissement Mobile Money via le fournisseur sandbox (HTTP)', () => {
     const online = await initiate(invoice.id, '3000.00');
     await simulate(await attemptIdOf(online.payment.id)).expect(200);
 
-    expect(await getInvoice(app, cashier, invoice.id)).toMatchObject({ status: 'partially_paid', amountPaid: '3000.00', balance: '5500.50' });
+    expect(await getInvoice(app, cashier, invoice.id)).toMatchObject({ status: 'partially_paid', amountPaid: '3000.00', balance: '5500.00' });
   });
 
   it('est idempotent : republier le même événement n’enregistre pas un second paiement', async () => {
@@ -111,7 +127,7 @@ describe('encaissement Mobile Money via le fournisseur sandbox (HTTP)', () => {
       purpose: 'patient_invoice' as const,
       tenantId: a.tenantId,
       referenceId: invoice.id,
-      amount: '8500.50',
+      amount: '8500.00',
       currency: 'XOF',
       provider: 'sandbox',
       providerReference: 'x',
@@ -122,7 +138,7 @@ describe('encaissement Mobile Money via le fournisseur sandbox (HTTP)', () => {
 
     const after = await getInvoice(app, cashier, invoice.id);
     expect(after.payments).toHaveLength(1);
-    expect(after.amountPaid).toBe('8500.50');
+    expect(after.amountPaid).toBe('8500.00');
   });
 
   it('une seule demande en attente par facture (409), puis une nouvelle demande après un échec', async () => {
@@ -131,7 +147,7 @@ describe('encaissement Mobile Money via le fournisseur sandbox (HTTP)', () => {
 
     const second = await payMobile(app, cashier, invoice.id, '100.00').expect(409);
     await simulate(await attemptIdOf(first.payment.id), 'failure').expect(200);
-    const retry = await payMobile(app, cashier, invoice.id, '8500.50').expect(201);
+    const retry = await payMobile(app, cashier, invoice.id, '8500.00').expect(201);
 
     expect(second.body.code).toBe('payment_already_pending');
     const detail = await getInvoice(app, cashier, invoice.id);
@@ -147,7 +163,7 @@ describe('encaissement Mobile Money via le fournisseur sandbox (HTTP)', () => {
     const res = await http(app)
       .post(`${BILLING}/invoices/${invoice.id}/payments`)
       .set(bearer(cashier))
-      .send({ method: 'other', amount: '600.00', reference: 'CHQ-9' })
+      .send({ method: 'other', amount: '600.00', cashSessionId: sessionId, reference: 'CHQ-9' })
       .expect(422);
 
     expect(res.body.code).toBe('amount_exceeds_balance');
@@ -157,7 +173,7 @@ describe('encaissement Mobile Money via le fournisseur sandbox (HTTP)', () => {
     const invoice = await newInvoice();
     await initiate(invoice.id);
 
-    const res = await http(app).post(`${BILLING}/invoices/${invoice.id}/void`).set(bearer(accountant)).send({ reason: 'Annulation tentée' }).expect(409);
+    const res = await http(app).post(`${BILLING}/invoices/${invoice.id}/void`).set(bearer(accountant)).send({ reasonCode: 'other', comment: 'Annulation tentée' }).expect(409);
 
     expect(res.body.code).toBe('invoice_has_payments');
   });
@@ -242,7 +258,7 @@ describe('encaissement Mobile Money via le fournisseur sandbox (HTTP)', () => {
       purpose: 'patient_invoice',
       tenantId: b.tenantId,
       referenceId: invoice.id,
-      amount: '8500.50',
+      amount: '8500.00',
       currency: 'XOF',
       provider: 'sandbox',
       providerReference: 'r',

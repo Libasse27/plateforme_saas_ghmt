@@ -71,3 +71,61 @@ Pages tenant : abonnement (plan, usage, factures SaaS, paiement Mobile Money, ch
 ## Vérification attendue
 - API : tests unitaires + e2e par point (refus 403/404/422/409, isolation entre tenants, jeton tenant refusé sur `/platform/*` et inversement, numérotation sans trou sous concurrence, idempotence des webhooks, re-vérification serveur, transitions du cycle de vie avec horloge simulée, limites dures/souples, quatre yeux, séparation des tâches de caisse). Couverture ≥ 80 %, `tsc` sans erreur, suite complète verte.
 - Test de fumée réel : abonnement en essai → facture → paiement sandbox par webhook → abonnement actif ; facture patient → encaissement espèces + Mobile Money sandbox → clôture de caisse.
+
+---
+
+## R. Correctifs de la revue santé de la phase (2026-10-05)
+
+### Contrats modifiés (référence commune API ↔ Web)
+| # | Contrat |
+|---|---|
+| R1 | `GET /api/v1/subscription/status` (`@AuthenticatedOnly`, tout utilisateur du tenant) → `{ status, trialEndsAt \| null, daysLeft \| null, mode: 'normal' \| 'restricted' \| 'continuity' }` (`restricted` = grâce, `continuity` = suspendu, résilié ou expiré). Aucune donnée financière. |
+| R2 | `price_list_items` : `isSensitive: boolean` (défaut false) et `printLabel: string \| null`. Les lignes de facture conservent `label` + `isSensitive` + `printLabel`. Pour un lecteur sans `consultations:consultation:read`, et **toujours sur le reçu**, une ligne sensible est rendue avec `printLabel` (ou un libellé neutre par catégorie : « Consultation », « Acte médical », « Examen », « Médicament », « Prestation ») et `labelMasked: true`. |
+| R3 | Identité patient dans la facturation : pour un lecteur sans `patients:patient:read`, `patient` = `{ id, ipp, fullName: null, identityMasked: true }`. La lecture d'une facture applique le **périmètre patient** (comme la création). |
+| R4 | `POST /api/v1/billing/payments/:id/abandon` (`cashier:payment:create`) : re-vérifie le statut chez le fournisseur ; s'il n'y a pas de succès, passe le paiement en `cancelled` et libère le montant (200 `{ status }`) ; s'il y a eu succès, enregistre le paiement (200 `{ status: 'succeeded' }`). Audité. Expiration des tentatives `patient_invoice` : 30 min. |
+| R5 | Reçu : `GET …/invoices/:id/receipt` refusé pour `draft` (409 `invoice_not_issued`) ; pour `void`, `voided: true` (filigrane « ANNULÉE » côté web). |
+| R6 | Annulation de facture : `{ reasonCode: 'duplicate' \| 'wrong_price' \| 'wrong_patient' \| 'service_not_rendered' \| 'other', comment?: string(≤ 300) }` ; seul `reasonCode` va dans l'audit. |
+| R7 | Devises sans subdivision (XOF, XAF, GNF, CDF) : montants et prix entiers (422 `amount_scale` sinon), totaux de ligne arrondis à l'unité. Code d'erreur fournisseur unifié `payment_provider_unavailable` (message web dédié). |
+| R8 | `POST /api/v1/cashier/sessions/:id/force-close { countedAmount, reason }` (`cashier:cash_session:validate`, interdit à l'ouvreur) : clôture contradictoire auditée. La clôture normale exige `note` si l'écart ≠ 0. |
+| R9 | Encaissement `other` (chèque, virement) : `cashSessionId` obligatoire comme pour les espèces. La caisse de la session doit être sur le **même site** que la facture (422 `cash_register_site_mismatch`). |
+
+### Règles d'autorisation (continuité des soins)
+- Suspension, résiliation et expiration (`mode: 'continuity'`) : lecture seule **sauf** création de patient, facturation (`billing:invoice:create`), encaissement et sessions de caisse, et mise à jour de rendez-vous (`appointments:appointment:update`, arrivée du patient). Règle durable : un impayé ne bloque jamais l'accueil, la facturation ni la saisie clinique.
+- Grâce (`restricted`) : bloque création/invitation d'utilisateurs et exports **de masse** ; les exports relevant des droits du patient (`patients:patient:export`, `consultations:medical_record:export`) restent permis.
+
+### Paiements en ligne
+- Échec **technique** (délai dépassé, erreur réseau, 5xx) lors de l'initiation : la tentative reste `pending` et le job de relance l'interroge ; seul un **refus explicite** du fournisseur la passe à `failed`.
+- Un succès confirmé par le fournisseur aboutit **toujours** à un paiement enregistré, y compris tardif ; s'il dépasse le reste dû, le paiement est marqué `anomaly: 'overpaid'` et audité (remboursement : roadmap).
+- Les webhooks sont stockés **expurgés** (champs téléphone et identifiants personnels du payeur retirés), avec l'empreinte SHA-256 du corps brut pour l'anti-rejeu. Purge des corps déjà stockés.
+- Audit des passages en échec et des actions `refresh`.
+
+### Plateforme
+- `platform.tenants_usage` ne prend plus d'instant libre (`now()` imposé, nouvelle migration).
+
+### Reporté (roadmap, avant production réelle)
+Avoirs et remboursements, remises et exonérations validées, tiers payant / garant, responsable payeur des mineurs, mentions légales et factures normalisées par pays (e-MECeF, FNE…), conservation OHADA de 10 ans exclue de la purge, rapport Z et reçu 80 mm.
+
+### Revue sécurité (contrats modifiés utiles au web)
+| # | Contrat |
+|---|---|
+| H3 | `POST /subscription/change` : une **montée en gamme** n'applique plus le plan avant paiement. Réponse `effect: 'pending_payment'`, `invoice` = facture de prorata `open`, `subscription.plan` inchangé, `subscription.pendingChange` = offre demandée ; le plan, les droits et les modules s'appliquent au règlement du prorata (`payment.succeeded` ou paiement manuel validé). Une nouvelle demande annule le prorata précédent. Pendant l'essai : seules basic et standard (`409 plan_not_allowed_in_trial`) ; `GET /subscription/plans` ajoute `selectable: boolean` à chaque offre. La console plateforme applique toujours le plan tout de suite. |
+| M1 | Avant d'expirer une tentative, le job interroge une dernière fois le fournisseur. Montant ou devise différents ⇒ audit plateforme `payment.amount_mismatch` + journal d'erreur (alerte de rapprochement). |
+| M2 | Comptes plateforme : le TOTP est enrôlé **par le script** `scripts/create-platform-admin.mts` (URI otpauth, codes de secours et mot de passe généré affichés **uniquement sur un terminal**, refus si stdout est redirigé). `POST /platform/auth/login` d'un compte sans TOTP ⇒ `403 mfa_enrollment_required_cli` (plus aucune session). Les routes web `POST /platform/auth/mfa/totp/setup` et `/activate` sont **supprimées** (le web ne doit plus proposer l'enrôlement). |
+| M4 | `POST /appointments` : `source` limitée à `front_desk` ou `phone` pour le personnel (`422`, erreur `source_not_allowed` sur `source`). La reprogrammation vers un autre mois applique le contrôle de quota. |
+| M5 | Facture SaaS : clé d'idempotence dérivée d'un index aveugle HMAC du numéro (jamais un SHA-256 non salé) ; une seule tentative `pending` par facture (index unique partiel ; une nouvelle demande abandonne la précédente). |
+| M6 | Second paiement d'une facture SaaS déjà payée ⇒ audit `saas_invoice.duplicate_payment` (le rejeu de la tentative payante n'en génère pas). |
+| M7 | `POST /platform/subscriptions/{tenantId}/change` : dérogations (`overrides`) et plans non publics réservés au `super_admin` (`403 super_admin_required`). |
+| L1 | JWT du realm plateforme signés avec `JWT_PLATFORM_SECRET` (≥ 32 caractères ; obligatoire et distinct de `JWT_ACCESS_SECRET` en production, dérivé hors production s'il est absent). |
+| L2 | `POST /platform/auth/password/change { currentPassword, newPassword }` ⇒ `{ changed, revokedSessions }` : mot de passe actuel exigé, session MFA, autres sessions révoquées, audit. |
+| L7 | `POST /subscription/change` : 10 appels par minute et par IP (`429`). |
+| L8 | Migration 0300 : `search_path` des fonctions `SECURITY DEFINER` terminé par `pg_temp` ; `platform.payment_attempts` et `payment_events` sans suppression ni troncature (événements : seuls rattachement, issue et date de traitement évoluent) ; compteur de numéros de factures SaaS protégé (ni suppression ni recul) ; une facture SaaS `draft` ne passe pas à `paid`. |
+| L9 | `PAYMENTS_SANDBOX_ENABLED` vaut `false` par défaut (à activer explicitement dans `.env` de dev et `.env.test`). |
+| L10 | Journaux : masquage des en-têtes `x-token`, `x-sandbox-signature` et autres signatures ; reprise manuelle d'un paiement limitée à une par 10 s (`429`). |
+
+### Contrats complémentaires R (précisions d'implémentation)
+- Lignes de facture : `description` porte le libellé rendu (masqué si `labelMasked`), `isSensitive` et `labelMasked` sont exposés ; `price_list_items` : `isSensitive`, `printLabel`.
+- Annulation : `voidReasonCode` (code) et `voidReason` (commentaire libre ou `null`) sur le détail ; le commentaire n'est jamais dans l'audit.
+- `InvoicePaymentView` : statut `cancelled` possible, `anomaly: 'overpaid' | null`. `CashSessionView.forceClosed`.
+- Échec technique à l'initiation d'un paiement en ligne : `502 payment_provider_unavailable` mais le paiement reste `pending` (visible dans le détail de la facture, abandonnable). Code unifié aussi pour « aucun fournisseur disponible » (`503`).
+- Périmètre patient en lecture : appliqué au détail et au reçu d'une facture (pas à la liste, qui ne renvoie que des identifiants).
+

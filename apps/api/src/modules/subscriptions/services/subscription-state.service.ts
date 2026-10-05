@@ -24,8 +24,8 @@ export interface TransitionRequest {
   readonly patch?: Partial<Pick<Subscription, 'currentPeriodStart' | 'currentPeriodEnd' | 'planId' | 'billingPeriod' | 'cancelAtPeriodEnd' | 'pendingPlanId' | 'pendingBillingPeriod'>>;
 }
 
-/** Statuts pour lesquels le tenant passe en lecture seule (`platform.tenants.status = 'suspended'`). */
-const READ_ONLY_STATUSES: ReadonlySet<SubscriptionStatus> = new Set(['suspended', 'expired']);
+/** Statuts pour lesquels le tenant passe en lecture seule (continuité des soins uniquement ; docs/09 §R) (`platform.tenants.status = 'suspended'`). */
+const READ_ONLY_STATUSES: ReadonlySet<SubscriptionStatus> = new Set(['suspended', 'cancelled', 'expired']);
 
 /**
  * Unique point de modification de `subscriptions.status` (docs/05 A6) : valide la transition, l'applique de façon

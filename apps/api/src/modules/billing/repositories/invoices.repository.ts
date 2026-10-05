@@ -20,6 +20,8 @@ export interface NewLine extends ComputedLine {
   readonly priceListItemId: string | null;
   readonly category: string;
   readonly description: string;
+  readonly isSensitive: boolean;
+  readonly printLabel: string | null;
 }
 
 export type CatalogItem = PriceListItem & { priceList: PriceList };
@@ -59,6 +61,8 @@ export class InvoicesRepository {
         quantity: line.quantity,
         unitPrice: line.unitPrice,
         lineTotal: line.lineTotal,
+        isSensitive: line.isSensitive,
+        printLabel: line.printLabel,
       })),
     });
   }
@@ -88,6 +92,11 @@ export class InvoicesRepository {
 
   patientRef(tx: TenantTx, tenantId: string, id: string): Promise<InvoicePatientRef | null> {
     return tx.patient.findFirst({ where: { tenantId, id }, select: { id: true, ipp: true, firstName: true, lastName: true } });
+  }
+
+  /** Patient lu dans le périmètre du lecteur (patient fusionné ou archivé compris : une facture reste lisible). */
+  patientRefInScope(tx: TenantTx, tenantId: string, id: string, scope: Prisma.PatientWhereInput): Promise<InvoicePatientRef | null> {
+    return tx.patient.findFirst({ where: { tenantId, id, AND: [scope] }, select: { id: true, ipp: true, firstName: true, lastName: true } });
   }
 
   async siteExists(tx: TenantTx, tenantId: string, id: string): Promise<boolean> {
@@ -137,6 +146,15 @@ export class InvoicesRepository {
   /** Mise à jour gardée : seul un paiement encore `pending` peut changer (la base le garantit aussi). */
   async updatePendingPayment(tx: TenantTx, tenantId: string, id: string, data: Prisma.PatientPaymentUncheckedUpdateManyInput): Promise<boolean> {
     const result = await tx.patientPayment.updateMany({ where: { tenantId, id, status: 'pending' }, data });
+    return result.count === 1;
+  }
+
+  /**
+   * Règle un paiement en ligne : en attente, ou échoué / abandonné quand l'agrégateur confirme finalement le succès
+   * (succès tardif). La base interdit tout autre changement d'un paiement réglé.
+   */
+  async settleOnlinePayment(tx: TenantTx, tenantId: string, id: string, data: Prisma.PatientPaymentUncheckedUpdateManyInput): Promise<boolean> {
+    const result = await tx.patientPayment.updateMany({ where: { tenantId, id, status: { in: ['pending', 'failed', 'cancelled'] } }, data });
     return result.count === 1;
   }
 

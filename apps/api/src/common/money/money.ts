@@ -17,9 +17,12 @@ export function formatMoney(value: Money): string {
   return value.toFixed(SCALE);
 }
 
-/** Arrondi commercial à 2 décimales (moitié vers le haut), identique au `round()` de PostgreSQL pour les valeurs positives. */
-export function roundMoney(value: Money): Money {
-  return value.toDecimalPlaces(SCALE, Prisma.Decimal.ROUND_HALF_UP);
+/**
+ * Arrondi commercial (moitié vers le haut), identique au `round()` de PostgreSQL pour les valeurs positives :
+ * 2 décimales par défaut, 0 pour les devises sans subdivision (XOF, XAF, GNF, CDF).
+ */
+export function roundMoney(value: Money, scale: 0 | 2 = SCALE): Money {
+  return value.toDecimalPlaces(scale, Prisma.Decimal.ROUND_HALF_UP);
 }
 
 export const zeroMoney = (): Money => new Prisma.Decimal(0);

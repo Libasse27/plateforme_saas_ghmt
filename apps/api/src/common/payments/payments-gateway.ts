@@ -2,6 +2,7 @@
  * Contrat de la passerelle de paiement (docs/05 A9), implémenté par le module `payments`.
  * Les autres modules (facturation patient, abonnements SaaS) n'utilisent QUE ce contrat.
  */
+import { DomainError } from '../errors/domain-error';
 import type { PaymentPurpose } from '../events/domain-events';
 
 export const PAYMENTS_GATEWAY = Symbol('PAYMENTS_GATEWAY');
@@ -35,8 +36,33 @@ export interface InitiatedPayment {
   readonly instructions: string | null;
 }
 
+/**
+ * Fournisseur injoignable ou refusant la demande (code unifié `payment_provider_unavailable`).
+ * `attemptRetained` : échec TECHNIQUE, la tentative `attemptId` reste `pending` et le job de relance l'interroge ;
+ * sinon (refus explicite ou aucun fournisseur) la tentative est `failed` ou n'existe pas.
+ */
+export class PaymentProviderUnavailableError extends DomainError {
+  constructor(
+    readonly attemptId: string | null,
+    readonly attemptRetained: boolean,
+    status = 502,
+  ) {
+    super(
+      'payment_provider_unavailable',
+      status,
+      status === 503 ? 'Service Unavailable' : 'Bad Gateway',
+      attemptRetained ? 'Le fournisseur de paiement n’a pas répondu : le paiement sera vérifié automatiquement.' : 'Le fournisseur de paiement est momentanément indisponible.',
+    );
+  }
+}
+
 export interface PaymentsGateway {
   initiate(input: InitiatePaymentInput): Promise<InitiatedPayment>;
   /** Re-vérification serveur à serveur auprès de l'agrégateur ; publie l'événement si l'état final change. */
   refresh(attemptId: string): Promise<{ readonly status: PaymentAttemptStatus }>;
+  /**
+   * Abandon par l'encaisseur : une tentative encore en attente passe à `cancelled` sans événement ; un règlement déjà
+   * final est conservé (le statut courant est renvoyé). Un succès confirmé plus tard reste enregistrable.
+   */
+  cancel(attemptId: string): Promise<{ readonly status: PaymentAttemptStatus }>;
 }

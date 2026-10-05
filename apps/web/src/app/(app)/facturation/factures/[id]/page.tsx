@@ -11,7 +11,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { buttonClass } from '@/components/ui/styles';
 import { settle } from '@/lib/api/settle';
 import { canUse } from '@/lib/auth/me';
-import { canIssue, canVoid, isPayable, toCashSession, toInvoiceDetail } from '@/lib/domain/billing';
+import { canIssue, canVoid, isPayable, patientDisplay, toCashSession, toInvoiceDetail, VOID_REASON_LABELS, VOID_REASON_OPTIONS, MAX_VOID_COMMENT, MEDICAL_INFO_WARNING } from '@/lib/domain/billing';
 import { formatMoney } from '@/lib/domain/money';
 import { isUuid, items } from '@/lib/domain/raw';
 import { formatDay } from '@/lib/format/dates';
@@ -46,9 +46,9 @@ export default async function InvoiceDetailPage({ params }: { readonly params: P
     <>
       <PageHeader
         title={invoice.number ? `Facture ${invoice.number}` : 'Facture (brouillon)'}
-        description={`${invoice.patient.fullName}${invoice.patient.ipp ? ` · ${invoice.patient.ipp}` : ''}`}
+        description={invoice.patient.identityMasked || !invoice.patient.fullName ? patientDisplay(invoice.patient) : `${invoice.patient.fullName}${invoice.patient.ipp ? ` · ${invoice.patient.ipp}` : ''}`}
         actions={
-          canUse(me, 'billing', 'billing:invoice:print') && invoice.status !== 'draft' && invoice.status !== 'void' ? (
+          canUse(me, 'billing', 'billing:invoice:print') && invoice.status !== 'draft' ? (
             <Link href={`/facturation/factures/${encodeURIComponent(invoice.id)}/recu`} className={buttonClass.secondary}>Reçu imprimable</Link>
           ) : undefined
         }
@@ -61,7 +61,7 @@ export default async function InvoiceDetailPage({ params }: { readonly params: P
           <div><dt className="text-sm text-slate-700">Reste dû</dt><dd className="font-semibold">{formatMoney(invoice.balance, invoice.currency)}</dd></div>
         </dl>
         {invoice.status === 'void' ? (
-          <Alert tone="error">Facture annulée le {formatDay(invoice.voidedAt, tz)}{invoice.voidReason ? ` : ${invoice.voidReason}` : ''}.</Alert>
+          <Alert tone="error">Facture annulée le {formatDay(invoice.voidedAt, tz)}{invoice.voidReasonCode ? ` : ${VOID_REASON_LABELS[invoice.voidReasonCode]}` : ''}{invoice.voidReason ? ` — ${invoice.voidReason}` : ''}.</Alert>
         ) : null}
         {invoice.notes ? <p className="text-slate-800">Note : {invoice.notes}</p> : null}
 
@@ -99,7 +99,10 @@ export default async function InvoiceDetailPage({ params }: { readonly params: P
                 <ActionForm
                   action={voidInvoiceAction}
                   hidden={{ invoiceId: invoice.id }}
-                  fields={[{ kind: 'textarea', name: 'reason', label: 'Motif de l\'annulation', required: true }]}
+                  fields={[
+                    { kind: 'select', name: 'reasonCode', label: 'Motif de l\'annulation', required: true, options: VOID_REASON_OPTIONS, placeholder: 'Choisir un motif…' },
+                    { kind: 'textarea', name: 'comment', label: 'Commentaire (facultatif)', maxLength: MAX_VOID_COMMENT, hint: `${MEDICAL_INFO_WARNING} ${String(MAX_VOID_COMMENT)} caractères au plus.` },
+                  ]}
                   submitLabel="Confirmer l'annulation"
                   variant="danger"
                   pendingLabel="Annulation…"

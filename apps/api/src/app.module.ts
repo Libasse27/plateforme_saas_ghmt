@@ -21,6 +21,8 @@ import { PaymentsModule } from './modules/payments/payments.module';
 import { PlatformModule } from './modules/platform/platform.module';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
 
+import { REDACTED_LOG_PATHS } from './common/logging/redact';
+
 const DEFAULT_RATE_LIMIT = { ttl: 60_000, limit: 300 } as const;
 
 @Module({
@@ -29,7 +31,7 @@ const DEFAULT_RATE_LIMIT = { ttl: 60_000, limit: 300 } as const;
       pinoHttp: {
         level: process.env['LOG_LEVEL'] ?? 'info',
         // Jamais de secrets ni de corps de requête (données de santé) dans les logs techniques.
-        redact: ['req.headers.authorization', 'req.headers.cookie', 'res.headers["set-cookie"]'],
+        redact: [...REDACTED_LOG_PATHS],
         serializers: { req: (req: { id: unknown; method: string; url: string }) => ({ id: req.id, method: req.method, url: sanitizeLogUrl(req.url) }) },
       },
     }),

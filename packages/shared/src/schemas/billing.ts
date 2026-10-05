@@ -12,16 +12,30 @@ export const ITEM_CATEGORIES = ['consultation', 'acte', 'examen', 'medicament', 
 export type ItemCategory = (typeof ITEM_CATEGORIES)[number];
 export const PAYMENT_METHODS = ['cash', 'mobile_money', 'card', 'other'] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
-export const PATIENT_PAYMENT_STATUSES = ['pending', 'succeeded', 'failed'] as const;
+export const PATIENT_PAYMENT_STATUSES = ['pending', 'succeeded', 'failed', 'cancelled'] as const;
 export const CASH_SESSION_STATUSES = ['open', 'closed', 'validated'] as const;
 export type CashSessionStatus = (typeof CASH_SESSION_STATUSES)[number];
 
 export const MAX_INVOICE_LINES = 100;
 const REASON_MIN = 3;
-const REASON_MAX = 500;
+const VOID_COMMENT_MAX = 300;
+
+/** Motifs d'annulation d'une facture (seul le code figure dans l'audit). */
+export const VOID_REASON_CODES = ['duplicate', 'wrong_price', 'wrong_patient', 'service_not_rendered', 'other'] as const;
+export type VoidReasonCode = (typeof VOID_REASON_CODES)[number];
+
+/** Libellés neutres des lignes sensibles sans libellé d'impression, par catégorie (docs/09 §R2). */
+export const NEUTRAL_CATEGORY_LABELS: Readonly<Record<'consultation' | 'acte' | 'examen' | 'medicament' | 'autre', string>> = {
+  consultation: 'Consultation',
+  acte: 'Acte médical',
+  examen: 'Examen',
+  medicament: 'Médicament',
+  autre: 'Prestation',
+};
 
 const code = z.string().trim().min(1).max(40).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'code : lettres, chiffres, point, tiret, souligné');
 const label = z.string().trim().min(2).max(200);
+const printLabel = z.string().trim().min(2).max(200);
 const note = z.string().trim().min(1).max(500);
 /** Quantité décimale en chaîne (3 décimales au plus), strictement positive. */
 const quantity = z
@@ -52,11 +66,14 @@ export const createPriceListItemSchema = z.object({
   category: z.enum(ITEM_CATEGORIES),
   unitPrice: moneyAmount,
   isActive: z.boolean().default(true),
+  /** Prestation révélant un diagnostic (ex. dépistage) : libellé masqué hors clinique et sur le reçu. */
+  isSensitive: z.boolean().default(false),
+  printLabel: printLabel.nullable().optional(),
 });
 export type CreatePriceListItemInput = z.infer<typeof createPriceListItemSchema>;
 
 export const updatePriceListItemSchema = z
-  .object({ label, category: z.enum(ITEM_CATEGORIES), unitPrice: moneyAmount, isActive: z.boolean() })
+  .object({ label, category: z.enum(ITEM_CATEGORIES), unitPrice: moneyAmount, isActive: z.boolean(), isSensitive: z.boolean(), printLabel: printLabel.nullable() })
   .partial()
   .refine((value) => Object.keys(value).length > 0, 'aucun champ à modifier');
 export type UpdatePriceListItemInput = z.infer<typeof updatePriceListItemSchema>;
@@ -96,7 +113,11 @@ export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;
 export const replaceInvoiceLinesSchema = z.object({ lines: linesSchema });
 export type ReplaceInvoiceLinesInput = z.infer<typeof replaceInvoiceLinesSchema>;
 
-export const voidInvoiceSchema = z.object({ reason: z.string().trim().min(REASON_MIN).max(REASON_MAX) });
+export const voidInvoiceSchema = z.object({
+  reasonCode: z.enum(VOID_REASON_CODES),
+  /** Commentaire libre, conservé sur la facture mais jamais dans l'audit. */
+  comment: z.string().trim().min(1).max(VOID_COMMENT_MAX).optional(),
+});
 export type VoidInvoiceInput = z.infer<typeof voidInvoiceSchema>;
 
 export const listInvoicesSchema = z.object({
@@ -113,7 +134,7 @@ export const recordPaymentSchema = z
   .object({
     method: z.enum(PAYMENT_METHODS),
     amount: positiveMoneyAmount,
-    /** Espèces : session de caisse ouverte par l'encaisseur. */
+    /** Espèces ou autre mode (chèque, virement) : session de caisse ouverte par l'encaisseur, sur le même site que la facture. */
     cashSessionId: uuid.optional(),
     /** Mobile Money : numéro du payeur (haché côté plateforme, jamais journalisé). */
     payerPhone: phoneE164.optional(),
@@ -121,8 +142,8 @@ export const recordPaymentSchema = z
     reference: z.string().trim().min(1).max(100).optional(),
   })
   .superRefine((value, ctx) => {
-    if (value.method === 'cash' && !value.cashSessionId) {
-      ctx.addIssue({ code: 'custom', path: ['cashSessionId'], message: 'session de caisse obligatoire pour un paiement en espèces' });
+    if ((value.method === 'cash' || value.method === 'other') && !value.cashSessionId) {
+      ctx.addIssue({ code: 'custom', path: ['cashSessionId'], message: 'session de caisse obligatoire pour un paiement en espèces ou autre' });
     }
     if (value.method === 'mobile_money' && !value.payerPhone) {
       ctx.addIssue({ code: 'custom', path: ['payerPhone'], message: 'téléphone du payeur obligatoire pour le Mobile Money' });
@@ -144,6 +165,10 @@ export type OpenCashSessionInput = z.infer<typeof openCashSessionSchema>;
 
 export const closeCashSessionSchema = z.object({ countedAmount: moneyAmount, note: note.optional() });
 export type CloseCashSessionInput = z.infer<typeof closeCashSessionSchema>;
+
+/** Clôture contradictoire par un tiers habilité (docs/09 §R8). */
+export const forceCloseCashSessionSchema = z.object({ countedAmount: moneyAmount, reason: z.string().trim().min(REASON_MIN).max(VOID_COMMENT_MAX) });
+export type ForceCloseCashSessionInput = z.infer<typeof forceCloseCashSessionSchema>;
 
 export const validateCashSessionSchema = z.object({ note: note.optional() });
 export type ValidateCashSessionInput = z.infer<typeof validateCashSessionSchema>;
@@ -176,6 +201,8 @@ export interface PriceListItemView {
   readonly category: ItemCategory;
   readonly unitPrice: string;
   readonly isActive: boolean;
+  readonly isSensitive: boolean;
+  readonly printLabel: string | null;
 }
 
 export interface InvoiceLineView {
@@ -183,7 +210,10 @@ export interface InvoiceLineView {
   readonly lineNo: number;
   readonly priceListItemId: string | null;
   readonly category: ItemCategory;
+  /** Libellé rendu : remplacé par le libellé d'impression ou neutre quand `labelMasked` est vrai. */
   readonly description: string;
+  readonly isSensitive: boolean;
+  readonly labelMasked: boolean;
   readonly quantity: string;
   readonly unitPrice: string;
   readonly lineTotal: string;
@@ -201,6 +231,8 @@ export interface InvoicePaymentView {
   readonly provider: string | null;
   readonly checkoutUrl: string | null;
   readonly failureReason: string | null;
+  /** `overpaid` : succès fournisseur au-delà du reste dû (remboursement hors périmètre). */
+  readonly anomaly: string | null;
   readonly createdAt: string;
 }
 
@@ -225,8 +257,11 @@ export interface InvoiceDetailView extends InvoiceSummaryView {
   readonly subtotal: string;
   readonly notes: string | null;
   readonly voidedAt: string | null;
+  readonly voidReasonCode: VoidReasonCode | null;
+  /** Commentaire libre de l'annulation (jamais dans l'audit). */
   readonly voidReason: string | null;
-  readonly patient: { readonly id: string; readonly ipp: string; readonly fullName: string };
+  /** `fullName` est null et `identityMasked` vrai sans `patients:patient:read`. */
+  readonly patient: { readonly id: string; readonly ipp: string; readonly fullName: string | null; readonly identityMasked: boolean };
   readonly lines: readonly InvoiceLineView[];
   readonly payments: readonly InvoicePaymentView[];
 }
@@ -235,6 +270,8 @@ export interface ReceiptView {
   readonly establishment: string;
   readonly site: string;
   readonly invoice: InvoiceDetailView;
+  /** Facture annulée : le web appose le filigrane « ANNULÉE ». */
+  readonly voided: boolean;
   readonly printedAt: string;
 }
 
@@ -269,6 +306,13 @@ export interface CashSessionView {
   readonly closingCounted: string | null;
   /** Montant compté − attendu (négatif = manque). */
   readonly variance: string | null;
+  /** Clôture contradictoire par un tiers (force-close). */
+  readonly forceClosed: boolean;
   readonly validatedBy: string | null;
   readonly validatedAt: string | null;
+}
+
+/** Réponse de `POST /billing/payments/:id/abandon`. */
+export interface AbandonPaymentView {
+  readonly status: 'cancelled' | 'succeeded';
 }

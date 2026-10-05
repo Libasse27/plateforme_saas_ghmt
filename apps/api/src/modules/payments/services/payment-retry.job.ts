@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { Clock } from '../../../common/time/clock';
 import { PlatformDb } from '../../../infrastructure/prisma/platform-db.service';
-import { PENDING_EXPIRY_MS, PENDING_RETRY_AFTER_MS, RECHECK_MIN_INTERVAL_MS, REPUBLISH_AFTER_MS, RETRY_BATCH_SIZE } from '../payments.constants';
+import { PATIENT_INVOICE_EXPIRY_MS, PENDING_EXPIRY_MS, PENDING_RETRY_AFTER_MS, RECHECK_MIN_INTERVAL_MS, REPUBLISH_AFTER_MS, RETRY_BATCH_SIZE } from '../payments.constants';
 import { PaymentsRepository, type PaymentAttemptRow } from '../repositories/payments.repository';
 import { PaymentSettlementService } from './payment-settlement.service';
 
@@ -11,6 +11,11 @@ export interface RetryReport {
   readonly expired: number;
   readonly republished: number;
   readonly errors: number;
+}
+
+/** Délai d'expiration d'une tentative en attente : 30 min pour une facture patient, 24 h pour un abonnement SaaS. */
+function expiryDelayOf(purpose: string): number {
+  return purpose === 'patient_invoice' ? PATIENT_INVOICE_EXPIRY_MS : PENDING_EXPIRY_MS;
 }
 
 const EVERY_TEN_MINUTES = '*/10 * * * *';
@@ -44,21 +49,20 @@ export class PaymentRetryJob {
     }
   }
 
-  /** Une passe de relance (testable avec une date donnée). */
-  async runOnce(now: Date): Promise<RetryReport> {
+  /** Une passe de relance (testable avec une date donnée ; `tenantIds` restreint l'exécution, pour les tests). */
+  async runOnce(now: Date, options: { readonly tenantIds?: readonly string[] } = {}): Promise<RetryReport> {
     const olderThan = new Date(now.getTime() - PENDING_RETRY_AFTER_MS);
     const notCheckedSince = new Date(now.getTime() - RECHECK_MIN_INTERVAL_MS);
-    const expiryLimit = new Date(now.getTime() - PENDING_EXPIRY_MS);
-    const due = await this.db.run((tx) => this.repo.listPendingDue(tx, olderThan, notCheckedSince, RETRY_BATCH_SIZE));
+    const due = await this.db.run((tx) => this.repo.listPendingDue(tx, olderThan, notCheckedSince, RETRY_BATCH_SIZE, options.tenantIds));
 
     let checked = 0;
     let expired = 0;
     let errors = 0;
     for (const attempt of due) {
       try {
-        if (attempt.createdAt <= expiryLimit) {
-          await this.settlement.expire(attempt);
-          expired += 1;
+        if (attempt.createdAt.getTime() <= now.getTime() - expiryDelayOf(attempt.purpose)) {
+          if (await this.expireAfterLastCheck(attempt)) expired += 1;
+          else checked += 1;
         } else {
           await this.settlement.verifyAndSettle(attempt);
           checked += 1;
@@ -68,13 +72,28 @@ export class PaymentRetryJob {
         this.logger.warn({ attemptId: attempt.id, error: error instanceof Error ? error.name : 'unknown' }, 'Relance impossible pour une tentative');
       }
     }
-    const republished = await this.republishUnnotified(now);
+    const republished = await this.republishUnnotified(now, options.tenantIds);
     return { checked, expired, republished, errors };
   }
 
-  private async republishUnnotified(now: Date): Promise<number> {
+  /**
+   * Dernière interrogation du fournisseur avant d'expirer : un succès (ou un échec) confirmé est enregistré tel quel.
+   * Fournisseur injoignable ⇒ expiration quand même : un succès confirmé plus tard reste enregistrable (succès tardif).
+   * Renvoie vrai si la tentative a été expirée.
+   */
+  private async expireAfterLastCheck(attempt: PaymentAttemptRow): Promise<boolean> {
+    try {
+      if ((await this.settlement.verifyAndSettle(attempt)) !== 'pending') return false;
+    } catch (error: unknown) {
+      this.logger.warn({ attemptId: attempt.id, error: error instanceof Error ? error.name : 'unknown' }, 'Dernier contrôle impossible avant expiration');
+    }
+    await this.settlement.expire(attempt);
+    return true;
+  }
+
+  private async republishUnnotified(now: Date, tenantIds?: readonly string[]): Promise<number> {
     const settledBefore = new Date(now.getTime() - REPUBLISH_AFTER_MS);
-    const rows: PaymentAttemptRow[] = await this.db.run((tx) => this.repo.listUnnotified(tx, settledBefore, RETRY_BATCH_SIZE));
+    const rows: PaymentAttemptRow[] = await this.db.run((tx) => this.repo.listUnnotified(tx, settledBefore, RETRY_BATCH_SIZE, tenantIds));
     for (const row of rows) await this.settlement.ensureNotified(row);
     return rows.length;
   }

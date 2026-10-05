@@ -47,7 +47,7 @@ export class PlatformTokenService {
         expiresIn: ACCESS_TOKEN_TTL_SECONDS,
         issuer: this.env.JWT_ISSUER,
         audience: this.audience,
-        secret: this.env.JWT_ACCESS_SECRET,
+        secret: this.env.JWT_PLATFORM_SECRET,
       },
     );
   }
@@ -59,7 +59,7 @@ export class PlatformTokenService {
         algorithms: [ALGORITHM],
         issuer: this.env.JWT_ISSUER,
         audience: this.audience,
-        secret: this.env.JWT_ACCESS_SECRET,
+        secret: this.env.JWT_PLATFORM_SECRET,
       });
     } catch {
       throw DomainError.unauthorized('Jeton invalide ou expiré.');

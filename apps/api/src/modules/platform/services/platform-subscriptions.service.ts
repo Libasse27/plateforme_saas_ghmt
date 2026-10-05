@@ -30,6 +30,7 @@ export class PlatformSubscriptionsService {
 
   async changePlan(tenantId: string, input: PlatformChangePlanInput, principal: PlatformPrincipal): Promise<PlatformChangePlanResult> {
     const now = this.clock.now();
+    await this.assertMayChange(input, principal);
     const outcome = await this.planChange.change({
       tenantId,
       planCode: input.planCode,
@@ -43,6 +44,15 @@ export class PlatformSubscriptionsService {
       const invoice = outcome.invoice ? await tx.saasInvoice.findUniqueOrThrow({ where: { id: outcome.invoice.id }, include: { lines: true } }) : null;
       return { effect: outcome.effect, subscription, invoice: invoice ? toSaasInvoiceView(invoice) : null };
     });
+  }
+
+  /** Dérogations de droits et plans non publics : décision commerciale réservée au Super Administrateur (revue sécurité M7). */
+  private async assertMayChange(input: PlatformChangePlanInput, principal: PlatformPrincipal): Promise<void> {
+    if (principal.role === 'super_admin') return;
+    const target = await this.platformDb.run((tx) => this.repository.latestPlanByCode(tx, input.planCode));
+    if (input.overrides !== undefined || (target && !target.isPublic)) {
+      throw DomainError.forbidden('super_admin_required', 'Cette action est réservée au Super Administrateur.');
+    }
   }
 
   async extendTrial(tenantId: string, principal: PlatformPrincipal): Promise<PlatformSubscriptionView> {
@@ -64,7 +74,7 @@ export class PlatformSubscriptionsService {
     const plan = await this.repository.findPlan(tx, subscription.planId);
     if (!plan) return null;
     const pending = subscription.pendingPlanId ? await this.repository.findPlan(tx, subscription.pendingPlanId) : null;
-    const [usage] = await this.repository.usageOf(tx, [tenantId], now);
+    const [usage] = await this.repository.usageOf(tx, [tenantId]);
     return {
       id: subscription.id,
       tenantId,

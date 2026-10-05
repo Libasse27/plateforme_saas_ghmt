@@ -1,16 +1,16 @@
-import type { PublicPlanView, SubscriptionView } from '@ghmt/shared';
+import type { SubscriptionView } from '@ghmt/shared';
 import { changePlanAction } from '@/actions/subscription';
 import { ActionForm } from '@/components/forms/ActionForm';
 import { Badge } from '@/components/ui/Badge';
 import { formatMoney } from '@/lib/domain/money';
-import { PERIOD_LABELS } from '@/lib/domain/subscription';
+import { PERIOD_LABELS, type PlanOffer } from '@/lib/domain/subscription';
 
 function limitText(value: number | null, unit: string): string {
   return value === null ? `${unit} illimités` : `${String(value)} ${unit}`;
 }
 
 export interface PlanOffersProps {
-  readonly plans: readonly PublicPlanView[];
+  readonly plans: readonly PlanOffer[];
   readonly current: SubscriptionView | null;
   readonly canUpdate: boolean;
 }
@@ -37,7 +37,10 @@ export function PlanOffers({ plans, current, canUpdate }: PlanOffersProps) {
               <li>{limitText(limits.appointmentsMonthly, 'rendez-vous par mois')}</li>
               <li>{plan.entitlements.modules.length} modules inclus</li>
             </ul>
-            {canUpdate ? (
+            {canUpdate && !plan.selectable && !isCurrent ? (
+              <p className="mt-3 border-t border-slate-200 pt-3 text-sm font-medium text-slate-700">Disponible après la période d&apos;essai</p>
+            ) : null}
+            {canUpdate && (plan.selectable || isCurrent) ? (
               <div className="mt-3 border-t border-slate-200 pt-3">
                 <ActionForm
                   action={changePlanAction}

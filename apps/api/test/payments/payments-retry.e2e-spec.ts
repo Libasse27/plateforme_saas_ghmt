@@ -41,7 +41,7 @@ describe('payments : relance des tentatives en attente', () => {
     const { attemptId, reference } = await newAttempt(11 * MINUTE_MS);
     await patchSandboxTransaction(app, reference, { status: 'succeeded' });
 
-    const report = await job().runOnce(new Date());
+    const report = await job().runOnce(new Date(), { tenantIds: [tenant.tenantId] });
 
     expect(report.checked).toBeGreaterThanOrEqual(1);
     expect((await attemptRow(app, attemptId)).status).toBe('succeeded');
@@ -51,7 +51,7 @@ describe('payments : relance des tentatives en attente', () => {
   it('laisse en attente une tentative encore non payée (et mémorise la vérification)', async () => {
     const { attemptId } = await newAttempt(11 * MINUTE_MS);
 
-    await job().runOnce(new Date());
+    await job().runOnce(new Date(), { tenantIds: [tenant.tenantId] });
 
     const row = await attemptRow(app, attemptId);
     expect(row.status).toBe('pending');
@@ -63,16 +63,16 @@ describe('payments : relance des tentatives en attente', () => {
     const { attemptId, reference } = await newAttempt(2 * MINUTE_MS);
     await patchSandboxTransaction(app, reference, { status: 'succeeded' });
 
-    await job().runOnce(new Date());
+    await job().runOnce(new Date(), { tenantIds: [tenant.tenantId] });
 
     expect((await attemptRow(app, attemptId)).status).toBe('pending');
   });
 
   it('ne réinterroge pas une tentative vérifiée il y a moins de 5 minutes', async () => {
     const { attemptId } = await newAttempt(11 * MINUTE_MS);
-    await job().runOnce(new Date());
+    await job().runOnce(new Date(), { tenantIds: [tenant.tenantId] });
 
-    await job().runOnce(new Date());
+    await job().runOnce(new Date(), { tenantIds: [tenant.tenantId] });
 
     expect((await attemptRow(app, attemptId)).checkCount).toBe(1);
   });
@@ -80,7 +80,7 @@ describe('payments : relance des tentatives en attente', () => {
   it('expire (payment.failed expired) une tentative en attente depuis plus de 24 h', async () => {
     const { attemptId } = await newAttempt(25 * HOUR_MS);
 
-    const report = await job().runOnce(new Date());
+    const report = await job().runOnce(new Date(), { tenantIds: [tenant.tenantId] });
 
     expect(report.expired).toBeGreaterThanOrEqual(1);
     const row = await attemptRow(app, attemptId);
@@ -102,7 +102,7 @@ describe('payments : relance des tentatives en attente', () => {
     await app.get(PlatformDb).run((tx) => tx.paymentAttempt.update({ where: { id: attemptId }, data: { settledAt } }));
 
     fail = false;
-    const report = await job().runOnce(new Date());
+    const report = await job().runOnce(new Date(), { tenantIds: [tenant.tenantId] });
 
     expect(report.republished).toBeGreaterThanOrEqual(1);
     expect((await attemptRow(app, attemptId)).notifiedAt).not.toBeNull();

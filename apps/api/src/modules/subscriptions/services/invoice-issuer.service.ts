@@ -112,9 +112,18 @@ export class InvoiceIssuerService {
   }
 
   /** Annule les factures de renouvellement/conversion encore ouvertes (elles seront réémises au nouveau tarif). */
-  async voidOpenRecurring(tx: PlatformTx, subscription: Subscription, now: Date, actor: PlatformActor, reason: string): Promise<number> {
+  voidOpenRecurring(tx: PlatformTx, subscription: Subscription, now: Date, actor: PlatformActor, reason: string): Promise<number> {
+    return this.voidOpen(tx, subscription, now, actor, reason, ['renewal', 'conversion']);
+  }
+
+  /** Annule les prorata de montée en gamme encore ouverts (une nouvelle demande remplace la précédente). */
+  voidOpenProrata(tx: PlatformTx, subscription: Subscription, now: Date, actor: PlatformActor, reason: string): Promise<number> {
+    return this.voidOpen(tx, subscription, now, actor, reason, ['upgrade_prorata']);
+  }
+
+  private async voidOpen(tx: PlatformTx, subscription: Subscription, now: Date, actor: PlatformActor, reason: string, kinds: readonly SaasInvoiceKind[]): Promise<number> {
     const open = await tx.saasInvoice.findMany({
-      where: { subscriptionId: subscription.id, status: 'open', kind: { in: ['renewal', 'conversion'] } },
+      where: { subscriptionId: subscription.id, status: 'open', kind: { in: [...kinds] } },
       select: { id: true, number: true },
     });
     for (const invoice of open) {

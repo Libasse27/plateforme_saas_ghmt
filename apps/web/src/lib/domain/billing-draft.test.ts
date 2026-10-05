@@ -65,3 +65,13 @@ describe('édition des lignes d\'une facture (immuable)', () => {
     });
   });
 });
+
+describe('FCFA (R7)', () => {
+  it('refuse une ligne libre avec décimales en XOF et arrondit le total', () => {
+    const input = { description: 'Pansement', category: 'acte', unitPrice: '1500,5', quantity: '1' };
+    expect(addFreeLine([], input, 'k', 'XOF').ok).toBe(false);
+    expect(addFreeLine([], input, 'k', 'EUR').ok).toBe(true);
+    const lines = addFreeLine([], { ...input, unitPrice: '1001', quantity: '0.5' }, 'k', 'XOF');
+    expect(lines.ok && draftTotal(lines.lines, 'XOF')).toBe('501.00');
+  });
+});

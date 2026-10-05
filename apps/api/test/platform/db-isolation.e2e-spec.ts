@@ -55,7 +55,7 @@ describe('platform : cloisonnement des rôles SQL (ghmt_platform / ghmt_app)', (
   describe('agrégats d’usage : fonction SECURITY DEFINER, comptes uniquement', () => {
     it('renvoie exactement des colonnes de comptage (aucune donnée patient) pour les établissements demandés', async () => {
       const rows = await asPlatform<Record<string, unknown>[]>(
-        `SELECT * FROM platform.tenants_usage(ARRAY['${a.tenantId}']::uuid[], now())`,
+        `SELECT * FROM platform.tenants_usage(ARRAY['${a.tenantId}']::uuid[])`,
       );
 
       expect(rows).toHaveLength(1);
@@ -69,7 +69,7 @@ describe('platform : cloisonnement des rôles SQL (ghmt_platform / ghmt_app)', (
     it('cloisonne les décomptes entre établissements et restaure le contexte tenant de la session', async () => {
       const result = await app.get(PlatformDb).run(async (tx) => {
         const rows = await tx.$queryRawUnsafe<{ tenant_id: string; users: number; patients: number }[]>(
-          `SELECT tenant_id::text AS tenant_id, users, patients FROM platform.tenants_usage(ARRAY['${a.tenantId}','${b.tenantId}']::uuid[], now())`,
+          `SELECT tenant_id::text AS tenant_id, users, patients FROM platform.tenants_usage(ARRAY['${a.tenantId}','${b.tenantId}']::uuid[])`,
         );
         const [{ ctx }] = await tx.$queryRawUnsafe<{ ctx: string }[]>(`SELECT COALESCE(current_setting('app.tenant_id', true), '') AS ctx`);
         return { rows, ctx };
@@ -81,8 +81,12 @@ describe('platform : cloisonnement des rôles SQL (ghmt_platform / ghmt_app)', (
       expect(result.ctx).toBe('');
     });
 
+    it('n’accepte plus d’instant libre : seule la signature (uuid[]) existe', async () => {
+      await expect(asPlatform(`SELECT * FROM platform.tenants_usage(ARRAY['${a.tenantId}']::uuid[], now() - interval '400 days')`)).rejects.toThrow(/does not exist/i);
+    });
+
     it('n’est pas exécutable par le rôle applicatif ni par PUBLIC', async () => {
-      await expect(asTenant(a.tenantId, `SELECT * FROM platform.tenants_usage(NULL, now())`)).rejects.toThrow(/permission denied/i);
+      await expect(asTenant(a.tenantId, `SELECT * FROM platform.tenants_usage(NULL)`)).rejects.toThrow(/permission denied/i);
     });
   });
 
@@ -114,6 +118,64 @@ describe('platform : cloisonnement des rôles SQL (ghmt_platform / ghmt_app)', (
 
     it('next_saas_invoice_number n’est pas exécutable par le rôle applicatif', async () => {
       await expect(asTenant(a.tenantId, `SELECT platform.next_saas_invoice_number('SN', 2026)`)).rejects.toThrow(/permission denied/i);
+    });
+  });
+
+  describe('durcissement des fonctions et des pièces comptables (L8)', () => {
+    it('toutes les fonctions SECURITY DEFINER figent un search_path qui se termine par pg_temp', async () => {
+      const rows = await asPlatform<{ name: string; config: string[] | null }[]>(
+        `SELECT p.proname AS name, p.proconfig AS config FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'platform' AND p.prosecdef`,
+      );
+
+      expect(rows.length).toBeGreaterThanOrEqual(6);
+      for (const row of rows) {
+        const path = (row.config ?? []).find((entry) => entry.startsWith('search_path='));
+        expect(path, row.name).toMatch(/pg_temp$/);
+      }
+    });
+
+    it('le compteur de numéros de factures SaaS ne se supprime ni ne recule', async () => {
+      await expect(asPlatform('DELETE FROM platform.saas_invoice_counters')).rejects.toThrow(/interdite/i);
+      await expect(asPlatform('UPDATE platform.saas_invoice_counters SET last_value = 0')).rejects.toThrow(/ne recule jamais|interdite/i);
+    });
+
+    it('les tentatives de paiement ne se tronquent pas', async () => {
+      await expect(asPlatform('TRUNCATE platform.payment_attempts')).rejects.toThrow(/permission denied|interdit/i);
+    });
+
+    it('une facture SaaS en brouillon ne passe pas directement à « payée »', async () => {
+      const outcome = await app
+        .get(PlatformDb)
+        .run(async (tx) => {
+          const sub = await tx.subscription.findUniqueOrThrow({ where: { tenantId: a.tenantId } });
+          const draft = await tx.saasInvoice.create({
+            data: {
+              number: `GHMT-SN-2099-${String(Math.floor(Math.random() * 900000) + 100000)}`,
+              tenantId: a.tenantId,
+              subscriptionId: sub.id,
+              planId: sub.planId,
+              countryCode: 'SN',
+              status: 'draft',
+              kind: 'renewal',
+              billingPeriod: 'monthly',
+              currency: 'XOF',
+              subtotal: '100.00',
+              taxRate: '0.1800',
+              taxAmount: '18.00',
+              total: '118.00',
+              periodStart: new Date('2099-01-01'),
+              periodEnd: new Date('2099-02-01'),
+              issuedAt: new Date(),
+              dueAt: new Date(),
+            },
+          });
+          await tx.saasInvoice.update({ where: { id: draft.id }, data: { status: 'paid' } });
+          return 'accepté';
+        })
+        .catch((error: Error) => error.message);
+
+      expect(outcome).toMatch(/cannot be paid before issuance/i);
     });
   });
 });

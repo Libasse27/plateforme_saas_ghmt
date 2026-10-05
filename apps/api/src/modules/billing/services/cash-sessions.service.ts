@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type {
   CashSessionView,
   CloseCashSessionInput,
+  ForceCloseCashSessionInput,
   ListCashSessionsInput,
   OpenCashSessionInput,
   PermissionKey,
@@ -10,7 +11,8 @@ import type {
 import { AuditService } from '../../../common/audit/audit.service';
 import { RequestContext } from '../../../common/context/request-context';
 import { DomainError } from '../../../common/errors/domain-error';
-import { addMoney, formatMoney, parseMoney, zeroMoney } from '../../../common/money/money';
+import { assertAmountScale } from '../../../common/money/currency-scale';
+import { addMoney, formatMoney, parseMoney, zeroMoney, type Money } from '../../../common/money/money';
 import { Page, decodeUuidCursor } from '../../../common/pagination/page';
 import { Clock } from '../../../common/time/clock';
 import type { CashSession } from '../../../generated/prisma/client';
@@ -45,6 +47,7 @@ export class CashSessionsService {
         const register = await this.repo.findRegister(tx, tenantId, input.cashRegisterId);
         // Caisse inconnue, inactive ou hors périmètre : même réponse.
         if (!register || !register.isActive || !scope.includes(register.siteId)) throw DomainError.notFound('Caisse');
+        assertAmountScale(input.openingFloat, register.currency, 'openingFloat');
         if (await this.repo.hasOpenSession(tx, tenantId, register.id)) throw alreadyOpen();
         // La contrainte unique partielle tranche les ouvertures simultanées (23505 ⇒ 409).
         const row = await this.repo.createSession(tx, {
@@ -103,27 +106,64 @@ export class CashSessionsService {
         throw DomainError.forbidden('cash_session_not_owner', 'Seul l’ouvreur de la session peut la clôturer.', 'cashier:cash_session:create');
       }
       if (row.status !== 'open') throw DomainError.conflict('cash_session_not_open', 'Cette session de caisse n’est pas ouverte.');
-      const collected = (await this.repo.cashCollected(tx, tenantId, [id])).get(id) ?? zeroMoney();
-      const expected = expectedCashTotal(row.openingFloat, collected);
-      const counted = parseMoney(input.countedAmount);
-      const variance = cashVariance(counted, expected);
-      const closed = await this.repo.updateSession(tx, tenantId, id, {
-        status: 'closed',
-        closedBy: userId,
-        closedAt: this.clock.now(),
-        expectedTotal: expected,
-        closingCounted: counted,
-        variance,
-        closingNote: input.note ?? null,
-      });
-      await this.audit.record(tx, tenantId, {
-        action: 'cash_session.closed',
-        resourceType: 'cash_session',
-        resourceId: id,
-        changes: { expectedTotal: formatMoney(expected), countedAmount: formatMoney(counted), variance: formatMoney(variance) },
-      });
-      return toCashSessionView(closed, formatMoney(expected));
+      return this.closeLocked(tx, tenantId, row, { countedAmount: input.countedAmount, note: input.note ?? null, closedBy: userId, forced: false });
     });
+  }
+
+  /** Clôture contradictoire (R8) : un tiers habilité clôture la session d'un caissier absent ; jamais l'ouvreur lui-même. */
+  forceClose(id: string, input: ForceCloseCashSessionInput): Promise<CashSessionView> {
+    const { tenantId, userId } = this.context.requirePrincipal();
+    return this.db.run(async (tx) => {
+      const row = await this.requireInScope(tx, tenantId, id, 'cashier:cash_session:validate', await this.repo.lockSession(tx, tenantId, id, 'update'));
+      if (row.openedBy === userId) {
+        throw DomainError.forbidden('cash_session_force_close_forbidden', 'L’ouvreur ne peut pas forcer la clôture de sa propre session.', 'cashier:cash_session:validate');
+      }
+      if (row.status !== 'open') throw DomainError.conflict('cash_session_not_open', 'Cette session de caisse n’est pas ouverte.');
+      return this.closeLocked(tx, tenantId, row, { countedAmount: input.countedAmount, note: input.reason, closedBy: userId, forced: true });
+    });
+  }
+
+  /** Calcule l'attendu et l'écart, exige une note si l'écart est non nul, puis clôture (verrou exclusif déjà détenu). */
+  private async closeLocked(
+    tx: TenantTx,
+    tenantId: string,
+    row: CashSessionRow,
+    request: { readonly countedAmount: string; readonly note: string | null; readonly closedBy: string; readonly forced: boolean },
+  ): Promise<CashSessionView> {
+    assertAmountScale(request.countedAmount, row.currency, 'countedAmount');
+    const collected = (await this.repo.cashCollected(tx, tenantId, [row.id])).get(row.id) ?? zeroMoney();
+    const expected = expectedCashTotal(row.openingFloat, collected);
+    const counted = parseMoney(request.countedAmount);
+    const variance = cashVariance(counted, expected);
+    if (!variance.isZero() && !request.note) {
+      throw DomainError.unprocessable('closing_note_required', 'Une note est obligatoire lorsque le montant compté diffère de l’attendu.');
+    }
+    const closed = await this.repo.updateSession(tx, tenantId, row.id, {
+      status: 'closed',
+      closedBy: request.closedBy,
+      closedAt: this.clock.now(),
+      expectedTotal: expected,
+      closingCounted: counted,
+      variance,
+      closingNote: request.note,
+      forceClosed: request.forced,
+    });
+    await this.audit.record(tx, tenantId, {
+      action: request.forced ? 'cash_session.force_closed' : 'cash_session.closed',
+      resourceType: 'cash_session',
+      resourceId: row.id,
+      changes: this.closureChanges(expected, counted, variance, request.forced ? row.openedBy : null),
+    });
+    return toCashSessionView(closed, formatMoney(expected));
+  }
+
+  private closureChanges(expected: Money, counted: Money, variance: Money, openedBy: string | null): Record<string, unknown> {
+    return {
+      expectedTotal: formatMoney(expected),
+      countedAmount: formatMoney(counted),
+      variance: formatMoney(variance),
+      ...(openedBy ? { openedBy } : {}),
+    };
   }
 
   validate(id: string, input: ValidateCashSessionInput): Promise<CashSessionView> {

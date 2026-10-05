@@ -1,3 +1,4 @@
+import { Throttle } from '@nestjs/throttler';
 import { Body, Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
 import {
   changePlanSchema,
@@ -7,12 +8,15 @@ import {
   type ListSaasInvoicesQuery,
   type PayInvoiceInput,
 } from '@ghmt/shared';
-import { RequirePermission } from '../../../common/decorators/auth.decorators';
+import { AuthenticatedOnly, RequirePermission } from '../../../common/decorators/auth.decorators';
 import { AllowWhenSuspended } from '../../../common/decorators/realm.decorators';
 import { UuidPipe } from '../../../common/pipes/uuid.pipe';
 import { ZodValidationPipe } from '../../../common/pipes/zod-validation.pipe';
 import { SubscriptionsService } from '../services/subscriptions.service';
 import { TenantInvoicesService } from '../services/tenant-invoices.service';
+
+/** Changements de plan : chaque appel émet une facture et peut annuler les précédentes (10 par minute et par IP). */
+const PLAN_CHANGE_THROTTLE = { default: { limit: 10, ttl: 60_000 } } as const;
 
 /** Abonnement SaaS de l'établissement courant (docs/09 §A2-A4). Le tenant vient exclusivement du jeton. */
 @Controller('subscription')
@@ -28,6 +32,13 @@ export class SubscriptionController {
     return this.subscriptions.get();
   }
 
+  /** Statut d'accès pour la bannière de l'interface : tout utilisateur de l'établissement, aucune donnée financière. */
+  @Get('status')
+  @AuthenticatedOnly()
+  status() {
+    return this.subscriptions.status();
+  }
+
   @Get('plans')
   @RequirePermission('settings:establishment:read')
   listPlans() {
@@ -36,6 +47,7 @@ export class SubscriptionController {
 
   /** Autorisé en suspension : c'est la voie de réactivation (le plan est appliqué au paiement de la facture). */
   @Post('change')
+  @Throttle(PLAN_CHANGE_THROTTLE)
   @HttpCode(200)
   @AllowWhenSuspended()
   @RequirePermission('settings:establishment:update')

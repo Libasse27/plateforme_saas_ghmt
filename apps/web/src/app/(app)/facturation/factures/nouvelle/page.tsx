@@ -6,7 +6,7 @@ import { Alert } from '@/components/ui/Alert';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { settle } from '@/lib/api/settle';
 import { canUse } from '@/lib/auth/me';
-import { toPriceList, toPriceListItem } from '@/lib/domain/billing';
+import { displayLabel, toPriceList, toPriceListItem } from '@/lib/domain/billing';
 import { toPatient, toList, toSite } from '@/lib/domain/mappers';
 import { isUuid, items } from '@/lib/domain/raw';
 import { pageApi } from '@/server/api';
@@ -47,7 +47,7 @@ export default async function NewInvoicePage({ searchParams }: { readonly search
       {patientResult && !patientResult.ok ? <Alert tone="error">{patientResult.message}</Alert> : null}
       <InvoiceComposer
         sites={toList(sitesResult.value.data, toSite).map((s) => ({ value: s.id, label: s.city ? `${s.name} (${s.city})` : s.name }))}
-        catalog={catalog.map((item) => ({ id: item.id, label: item.label, unitPrice: item.unitPrice }))}
+        catalog={catalog.map((item) => ({ id: item.id, label: displayLabel({ description: item.label, category: item.category, labelMasked: item.labelMasked, printLabel: item.printLabel }), unitPrice: item.unitPrice }))}
         currency={priceList?.currency ?? (me.tenant.baseCurrency || 'XOF')}
         allowFreeLines={allowFreeLines}
         initialPatient={patient && patient.id ? { id: patient.id, fullName: patient.fullName } : patientId ? { id: patientId, fullName: 'Patient sélectionné' } : undefined}

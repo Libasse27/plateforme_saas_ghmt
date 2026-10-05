@@ -5,10 +5,26 @@ import { createPriceListItemSchema, createPriceListSchema, updatePriceListItemSc
 import { parseMoneyInput } from '@/lib/domain/money';
 import { fieldErrorsFromZod, formDataToFlat, publicValues, type FormState } from '@/lib/forms';
 import { actionApi } from '@/server/api';
-import { INVALID_REQUEST, pathId } from './context';
+import { currencyOf, INVALID_REQUEST, pathId } from './context';
 import { failureState, invalidState } from './helpers';
 
 const PRICING_PATH = '/facturation/tarifs';
+
+const PRINT_LABEL_MIN = 2;
+const PRINT_LABEL_MAX = 200;
+
+type SensitivityResult =
+  | { readonly ok: true; readonly body: { readonly isSensitive: boolean; readonly printLabel: string | null } }
+  | { readonly ok: false; readonly error: string };
+
+/** « Acte sensible » (case) et « Libellé imprimé » : un libellé imprimé n'a de sens que pour un acte sensible. */
+function parseSensitivity(flat: Readonly<Record<string, string | undefined>>): SensitivityResult {
+  const printLabel = (flat.printLabel ?? '').trim();
+  if (printLabel && (printLabel.length < PRINT_LABEL_MIN || printLabel.length > PRINT_LABEL_MAX)) {
+    return { ok: false, error: `Le libellé imprimé doit comporter de ${String(PRINT_LABEL_MIN)} à ${String(PRINT_LABEL_MAX)} caractères.` };
+  }
+  return { ok: true, body: { isSensitive: flat.isSensitive === 'on', printLabel: printLabel || null } };
+}
 
 export async function createPriceListAction(_prev: FormState, formData: FormData): Promise<FormState> {
   const flat = formDataToFlat(formData);
@@ -40,7 +56,8 @@ export async function createPriceItemAction(_prev: FormState, formData: FormData
   const flat = formDataToFlat(formData);
   const priceListId = pathId(flat.priceListId);
   if (!priceListId) return INVALID_REQUEST;
-  const price = parseMoneyInput(flat.unitPrice ?? '');
+  const price = parseMoneyInput(flat.unitPrice ?? '', currencyOf(flat.currency));
+  const sensitivity = parseSensitivity(flat);
   const parsed = createPriceListItemSchema.safeParse({
     code: flat.code?.trim(),
     label: flat.label,
@@ -48,10 +65,14 @@ export async function createPriceItemAction(_prev: FormState, formData: FormData
     unitPrice: price.ok ? price.amount : '',
     isActive: true,
   });
-  const errors = { ...(parsed.success ? {} : fieldErrorsFromZod(parsed.error)), ...(price.ok ? {} : { unitPrice: price.error }) };
-  if (!parsed.success || Object.keys(errors).length > 0) return invalidState(errors, publicValues(flat));
+  const errors = {
+    ...(parsed.success ? {} : fieldErrorsFromZod(parsed.error)),
+    ...(price.ok ? {} : { unitPrice: price.error }),
+    ...(sensitivity.ok ? {} : { printLabel: sensitivity.error }),
+  };
+  if (!parsed.success || !sensitivity.ok || Object.keys(errors).length > 0) return invalidState(errors, publicValues(flat));
   try {
-    await actionApi(`/billing/price-lists/${priceListId}/items`, { method: 'POST', body: parsed.data });
+    await actionApi(`/billing/price-lists/${priceListId}/items`, { method: 'POST', body: { ...parsed.data, ...sensitivity.body } });
   } catch (error) {
     return failureState(error, publicValues(flat));
   }
@@ -66,15 +87,18 @@ export async function updatePriceItemAction(_prev: FormState, formData: FormData
   if (!itemId) return INVALID_REQUEST;
   const patch: Record<string, unknown> = {};
   if (flat.unitPrice !== undefined) {
-    const price = parseMoneyInput(flat.unitPrice);
+    const price = parseMoneyInput(flat.unitPrice, currencyOf(flat.currency));
     if (!price.ok) return invalidState({ unitPrice: price.error }, publicValues(flat));
     patch.unitPrice = price.amount;
   }
   if (flat.isActive === 'true' || flat.isActive === 'false') patch.isActive = flat.isActive === 'true';
-  const parsed = updatePriceListItemSchema.safeParse(patch);
+  const sensitivity = flat.sensitivityForm === 'true' ? parseSensitivity(flat) : null;
+  if (sensitivity && !sensitivity.ok) return invalidState({ printLabel: sensitivity.error }, publicValues(flat));
+  const sensitivityOnly = Object.keys(patch).length === 0 && sensitivity?.ok === true;
+  const parsed = sensitivityOnly ? { success: true as const, data: {} } : updatePriceListItemSchema.safeParse(patch);
   if (!parsed.success) return invalidState(fieldErrorsFromZod(parsed.error), publicValues(flat));
   try {
-    await actionApi(`/billing/price-list-items/${itemId}`, { method: 'PATCH', body: parsed.data });
+    await actionApi(`/billing/price-list-items/${itemId}`, { method: 'PATCH', body: { ...parsed.data, ...(sensitivity?.ok ? sensitivity.body : {}) } });
   } catch (error) {
     return failureState(error, publicValues(flat));
   }

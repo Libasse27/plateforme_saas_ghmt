@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto';
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { ListSaasInvoicesQuery, PayInvoiceInput, PayInvoiceView, SaasInvoiceView } from '@ghmt/shared';
 import { AuditService } from '../../../common/audit/audit.service';
+import { FieldCrypto } from '../../../common/crypto/field-crypto.service';
 import { RequestContext } from '../../../common/context/request-context';
 import { DomainError } from '../../../common/errors/domain-error';
 import { Page, decodeDateIdCursor } from '../../../common/pagination/page';
@@ -23,6 +23,7 @@ export class TenantInvoicesService {
     private readonly context: RequestContext,
     private readonly audit: AuditService,
     private readonly clock: Clock,
+    private readonly crypto: FieldCrypto,
     @Optional() @Inject(PAYMENTS_GATEWAY) private readonly gateway?: PaymentsGateway,
   ) {}
 
@@ -57,7 +58,8 @@ export class TenantInvoicesService {
     if (invoice.status !== 'open') throw DomainError.conflict('invoice_not_payable', 'Cette facture ne peut plus être réglée.');
 
     const bucket = Math.floor(this.clock.now().getTime() / IDEMPOTENCY_WINDOW_MS);
-    const phoneDigest = createHash('sha256').update(input.payerPhone).digest('hex').slice(0, 16);
+    // Index aveugle HMAC (clé serveur) : jamais un SHA-256 non salé du numéro, qu'une base compromise ferait deviner par force brute.
+    const phoneKey = Buffer.from(this.crypto.blindIndex(principal.tenantId, input.payerPhone)).toString('hex').slice(0, 16);
     const initiated = await gateway.initiate({
       purpose: 'saas_invoice',
       tenantId: principal.tenantId,
@@ -67,7 +69,7 @@ export class TenantInvoicesService {
       channel: 'mobile_money',
       payerPhone: input.payerPhone,
       description: `Facture ${invoice.number}`,
-      idempotencyKey: `saas_invoice:${invoice.id}:${phoneDigest}:${bucket}`,
+      idempotencyKey: `saas_invoice:${invoice.id}:${phoneKey}:${bucket}`,
     });
     await this.tenantDb.run((tx) =>
       this.audit.record(tx, principal.tenantId, {

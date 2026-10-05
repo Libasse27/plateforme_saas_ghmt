@@ -11,6 +11,7 @@ import type {
 import { AuditService } from '../../../common/audit/audit.service';
 import { RequestContext } from '../../../common/context/request-context';
 import { DomainError } from '../../../common/errors/domain-error';
+import { assertAmountScale } from '../../../common/money/currency-scale';
 import { formatMoney, parseMoney } from '../../../common/money/money';
 import { Page, decodeCursor } from '../../../common/pagination/page';
 import { TenantDb, type TenantTx } from '../../../infrastructure/prisma/tenant-db.service';
@@ -129,7 +130,8 @@ export class PriceListsService {
     const { tenantId } = this.context.requirePrincipal();
     try {
       return await this.db.run(async (tx) => {
-        await this.requireList(tx, tenantId, listId);
+        const list = await this.requireList(tx, tenantId, listId);
+        assertAmountScale(input.unitPrice, list.currency, 'unitPrice');
         if (await this.repo.itemCodeExists(tx, tenantId, listId, input.code)) throw itemCodeTaken();
         const row = await this.repo.createItem(tx, {
           tenantId,
@@ -139,12 +141,14 @@ export class PriceListsService {
           category: input.category,
           unitPrice: parseMoney(input.unitPrice),
           isActive: input.isActive,
+          isSensitive: input.isSensitive,
+          printLabel: input.printLabel ?? null,
         });
         await this.audit.record(tx, tenantId, {
           action: 'price_list_item.created',
           resourceType: 'price_list_item',
           resourceId: row.id,
-          changes: { priceListId: listId, code: row.code, category: row.category, unitPrice: formatMoney(row.unitPrice) },
+          changes: { priceListId: listId, code: row.code, category: row.category, unitPrice: formatMoney(row.unitPrice), isSensitive: row.isSensitive },
         });
         return toPriceListItemView(row);
       });
@@ -159,6 +163,10 @@ export class PriceListsService {
     return this.db.run(async (tx) => {
       const current = await this.repo.findItem(tx, tenantId, id);
       if (!current) throw DomainError.notFound('Article');
+      if (input.unitPrice !== undefined) {
+        const list = await this.requireList(tx, tenantId, current.priceListId);
+        assertAmountScale(input.unitPrice, list.currency, 'unitPrice');
+      }
       const data = { ...input, ...(input.unitPrice !== undefined ? { unitPrice: parseMoney(input.unitPrice) } : {}) };
       const row = await this.repo.updateItem(tx, tenantId, id, data);
       await this.audit.record(tx, tenantId, {
@@ -166,7 +174,7 @@ export class PriceListsService {
         resourceType: 'price_list_item',
         resourceId: id,
         changes: diff(
-          { label: current.label, category: current.category, unitPrice: formatMoney(current.unitPrice), isActive: current.isActive },
+          { label: current.label, category: current.category, unitPrice: formatMoney(current.unitPrice), isActive: current.isActive, isSensitive: current.isSensitive },
           { ...input, ...(input.unitPrice !== undefined ? { unitPrice: formatMoney(row.unitPrice) } : {}) },
         ),
       });

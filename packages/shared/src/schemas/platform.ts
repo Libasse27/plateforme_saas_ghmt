@@ -75,6 +75,13 @@ export const platformLogoutSchema = z.object({ refreshToken: z.string().min(16).
 
 export const PLATFORM_ADMIN_PASSWORD_MIN_LENGTH = PRIVILEGED_PASSWORD_MIN_LENGTH;
 
+/** Changement de mot de passe d'un utilisateur plateforme (docs/09 §R, revue sécurité L2). */
+export const platformPasswordChangeSchema = z.object({
+  currentPassword: z.string().min(1).max(PASSWORD_MAX_LENGTH),
+  newPassword: z.string().min(PLATFORM_ADMIN_PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH),
+});
+export type PlatformPasswordChangeInput = z.infer<typeof platformPasswordChangeSchema>;
+
 export interface PlatformTokens {
   readonly accessToken: string;
   readonly refreshToken: string;

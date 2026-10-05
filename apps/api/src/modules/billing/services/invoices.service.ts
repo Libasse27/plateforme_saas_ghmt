@@ -22,7 +22,8 @@ import { buildPatientScopeFilter } from '../../patients/domain/patient-scope';
 import { totalOfLines } from '../domain/invoice-calculation';
 import { INVOICE_SEQUENCE_SCOPE, formatInvoiceNumber, invoiceYearOf } from '../domain/invoice-number';
 import { statusAfterPayments } from '../domain/invoice-status';
-import { toInvoiceDetail, toInvoiceSummary } from '../mappers/billing.mapper';
+import { holdsPermission } from '../domain/billing-scope';
+import { toInvoiceDetail, toInvoiceSummary, type InvoiceViewPolicy } from '../mappers/billing.mapper';
 import { InvoicesRepository } from '../repositories/invoices.repository';
 import { refIssue } from './billing-errors';
 import { InvoiceLinesResolver } from './invoice-lines.resolver';
@@ -109,7 +110,7 @@ export class InvoicesService {
   get(id: string): Promise<InvoiceDetailView> {
     const { tenantId } = this.context.requirePrincipal();
     return this.db.run(async (tx) => {
-      const view = await this.readInScope(tx, tenantId, id, 'billing:invoice:read');
+      const view = await this.readInScope(tx, tenantId, id, 'billing:invoice:read', this.policy());
       await this.audit.record(tx, tenantId, { action: 'invoice.read', resourceType: 'invoice', resourceId: id, patientId: view.patientId });
       return view;
     });
@@ -118,7 +119,9 @@ export class InvoicesService {
   receipt(id: string): Promise<ReceiptView> {
     const { tenantId } = this.context.requirePrincipal();
     return this.db.run(async (tx) => {
-      const invoice = await this.readInScope(tx, tenantId, id, 'billing:invoice:print');
+      // Le reçu est remis au patient : les libellés sensibles y sont toujours masqués, quel que soit le lecteur.
+      const invoice = await this.readInScope(tx, tenantId, id, 'billing:invoice:print', { ...this.policy(), clinicalLabels: false });
+      if (invoice.status === 'draft') throw DomainError.conflict('invoice_not_issued', 'Le reçu n’existe que pour une facture émise.');
       const profile = await loadTenantProfile(tx);
       const site = await this.repo.siteName(tx, tenantId, invoice.siteId);
       await this.audit.record(tx, tenantId, {
@@ -128,7 +131,7 @@ export class InvoicesService {
         patientId: invoice.patientId,
         changes: { number: invoice.number },
       });
-      return { establishment: profile.name, site: site ?? '', invoice, printedAt: this.clock.now().toISOString() };
+      return { establishment: profile.name, site: site ?? '', invoice, voided: invoice.status === 'void', printedAt: this.clock.now().toISOString() };
     });
   }
 
@@ -190,36 +193,54 @@ export class InvoicesService {
       if (!invoice.amountPaid.isZero() || (await this.repo.hasLivePayments(tx, tenantId, id))) {
         throw DomainError.conflict('invoice_has_payments', 'Une facture encaissée ou avec un paiement en attente ne peut pas être annulée.');
       }
-      await this.repo.update(tx, tenantId, id, { status: 'void', voidedAt: this.clock.now(), voidedBy: userId, voidReason: input.reason, updatedBy: userId });
+      await this.repo.update(tx, tenantId, id, {
+        status: 'void',
+        voidedAt: this.clock.now(),
+        voidedBy: userId,
+        voidReasonCode: input.reasonCode,
+        // La colonne est obligatoire pour une facture annulée : sans commentaire, elle reprend le code du motif.
+        voidReason: input.comment ?? input.reasonCode,
+        updatedBy: userId,
+      });
       await this.audit.record(tx, tenantId, {
         action: 'invoice.voided',
         resourceType: 'invoice',
         resourceId: id,
         patientId: invoice.patientId,
-        changes: { number: invoice.number, reason: input.reason },
+        // Le commentaire libre peut révéler une information de santé : seul le motif codé est journalisé.
+        changes: { number: invoice.number, reasonCode: input.reasonCode },
       });
       return this.detail(tx, tenantId, id);
     });
   }
 
   /** Facture lisible dans la portée de la permission, sinon 404 (on ne révèle pas l'existence d'une facture d'un autre site). */
-  private async readInScope(tx: TenantTx, tenantId: string, id: string, permission: PermissionKey): Promise<InvoiceDetailView> {
+  private async readInScope(tx: TenantTx, tenantId: string, id: string, permission: PermissionKey, policy: InvoiceViewPolicy): Promise<InvoiceDetailView> {
     const siteScope = await this.siteScopes.resolve(tx, tenantId, permission);
     const row = await this.repo.findDetail(tx, tenantId, id);
     if (!row || !siteScope.includes(row.siteId)) throw DomainError.notFound('Facture');
-    return this.view(tx, tenantId, row);
+    // Lecture : le périmètre patient s'applique comme à la création (patient hors périmètre = facture introuvable).
+    const patient = policy.patientIdentity
+      ? await this.repo.patientRefInScope(tx, tenantId, row.patientId, await this.patientScopeFilter(tx, tenantId))
+      : await this.repo.patientRef(tx, tenantId, row.patientId);
+    if (!patient) throw DomainError.notFound('Facture');
+    return toInvoiceDetail(row, patient, policy);
   }
 
   private async detail(tx: TenantTx, tenantId: string, id: string): Promise<InvoiceDetailView> {
     const row = await this.repo.findDetail(tx, tenantId, id);
     if (!row) throw DomainError.notFound('Facture');
-    return this.view(tx, tenantId, row);
-  }
-
-  private async view(tx: TenantTx, tenantId: string, row: NonNullable<Awaited<ReturnType<InvoicesRepository['findDetail']>>>): Promise<InvoiceDetailView> {
     const patient = await this.repo.patientRef(tx, tenantId, row.patientId);
     if (!patient) throw DomainError.notFound('Patient');
-    return toInvoiceDetail(row, patient);
+    return toInvoiceDetail(row, patient, this.policy());
+  }
+
+  /** Droits d'affichage du lecteur courant : libellés cliniques et identité du patient. */
+  private policy(): InvoiceViewPolicy {
+    return {
+      clinicalLabels: holdsPermission('consultations:consultation:read', this.context.grants),
+      patientIdentity: holdsPermission('patients:patient:read', this.context.grants),
+    };
   }
 
   private assertDraft(status: string): void {

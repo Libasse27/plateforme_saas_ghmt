@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { InvoiceLineInput, PermissionKey } from '@ghmt/shared';
 import { RequestContext } from '../../../common/context/request-context';
 import { DomainError, type FieldIssue } from '../../../common/errors/domain-error';
+import { assertAmountScale, currencyScale } from '../../../common/money/currency-scale';
 import { parseMoney } from '../../../common/money/money';
 import type { TenantTx } from '../../../infrastructure/prisma/tenant-db.service';
 import { computeLine } from '../domain/invoice-calculation';
@@ -32,11 +33,20 @@ export class InvoiceLinesResolver {
     const ids = [...new Set(inputs.flatMap((line) => catalogIdOf(line) ?? []))];
     const catalog = new Map((await this.invoices.findCatalogItems(tx, tenantId, ids)).map((item) => [item.id, item]));
     const issues: FieldIssue[] = [];
+    const scale = currencyScale(currency);
     const lines = inputs.map((input, index): NewLine | null => {
       const itemId = catalogIdOf(input);
       if (itemId === null) {
         const free = input as Extract<InvoiceLineInput, { description: string }>;
-        return { priceListItemId: null, category: free.category, description: free.description, ...computeLine(free.quantity, parseMoney(free.unitPrice)) };
+        assertAmountScale(free.unitPrice, currency, `lines.${index}.unitPrice`);
+        return {
+          priceListItemId: null,
+          category: free.category,
+          description: free.description,
+          isSensitive: false,
+          printLabel: null,
+          ...computeLine(free.quantity, parseMoney(free.unitPrice), scale),
+        };
       }
       const item = catalog.get(itemId);
       const path = `lines.${index}.priceListItemId`;
@@ -53,7 +63,14 @@ export class InvoiceLinesResolver {
         return null;
       }
       const quantity = (input as { quantity: string }).quantity;
-      return { priceListItemId: item.id, category: item.category, description: item.label, ...computeLine(quantity, item.unitPrice) };
+      return {
+        priceListItemId: item.id,
+        category: item.category,
+        description: item.label,
+        isSensitive: item.isSensitive,
+        printLabel: item.printLabel,
+        ...computeLine(quantity, item.unitPrice, scale),
+      };
     });
     if (issues.length > 0) throw DomainError.validation(issues);
     return lines.filter((line): line is NewLine => line !== null);

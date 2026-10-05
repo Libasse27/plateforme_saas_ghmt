@@ -158,7 +158,7 @@ describe('payments : adaptateur CinetPay de bout en bout (fetch simulé)', () =>
 });
 
 describe('payments : aucun fournisseur ne répond', () => {
-  it('marque la tentative en échec et répond 502', async () => {
+  it('laisse la tentative en attente (échec technique) et répond 502', async () => {
     const fetchMock = vi.fn().mockRejectedValue(new TypeError('fetch failed'));
     const app = await createPaymentsApp({
       env: { ...CINETPAY_ENV, PAYMENTS_ROUTES: '{"*":["cinetpay"]}' },
@@ -171,8 +171,8 @@ describe('payments : aucun fournisseur ne répond', () => {
       await expect(gatewayOf(app).initiate(input)).rejects.toMatchObject({ status: 502 });
 
       const replayed = await gatewayOf(app).initiate(input);
-      expect((await attemptRow(app, replayed.attemptId)).failureReason).toBe('provider_unavailable');
-      expect(replayed.status).toBe('failed');
+      expect((await attemptRow(app, replayed.attemptId)).failureReason).toBeNull();
+      expect(replayed.status).toBe('pending');
     } finally {
       await app.close();
     }

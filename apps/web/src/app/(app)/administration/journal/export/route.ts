@@ -4,7 +4,7 @@ import { forwardHeaders } from '@/lib/api/client-info';
 import { readEnvelope } from '@/lib/api/envelope';
 import { ApiError, isApiError } from '@/lib/api/errors';
 import { parseMe } from '@/lib/auth/me';
-import { auditExportFilters, exportFailureHref, exportFailureKey, exportHeaders, isSameOrigin, parseAuditFilters } from '@/lib/domain/audit';
+import { auditExportFilters, exportFailureHref, exportFailureKey, exportHeaders, isSameOriginRequest, parseAuditFilters } from '@/lib/domain/audit';
 import { formDataToFlat } from '@/lib/forms';
 import { apiDeps } from '@/server/api';
 import { cookieTokenStore } from '@/lib/session/store';
@@ -36,12 +36,11 @@ async function fetchExport(token: string | undefined, body: unknown): Promise<Re
 }
 
 /**
- * Export CSV du journal d'audit. POST uniquement, avec contrôle de l'en-tête Origin (anti-CSRF : le cookie
+ * Export CSV du journal d'audit. POST uniquement, avec contrôle Fetch Metadata puis Origin (anti-CSRF : le cookie
  * de session part automatiquement avec un formulaire d'un autre site). Les filtres passent par une liste blanche.
  */
 export async function POST(request: Request): Promise<Response> {
-  const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
-  if (!isSameOrigin(request.headers.get('origin'), host)) {
+  if (!isSameOriginRequest(request.headers)) {
     return NextResponse.json({ message: 'Origine de la requête refusée.' }, { status: FORBIDDEN_STATUS, headers: { 'cache-control': 'no-store' } });
   }
   const flat = formDataToFlat(await request.formData());

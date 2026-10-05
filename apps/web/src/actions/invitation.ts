@@ -6,6 +6,14 @@ import { acceptInvitationSchema, isInvitationToken } from '@/lib/schemas';
 import { publicRequest } from '@/server/api';
 import { failureState, invalidState } from './helpers';
 
+/** Code établissement (même règle que l'inscription) : seul un code valide est repris dans l'URL de connexion. */
+const TENANT_SLUG = /^(?=.{3,48}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const LOGIN_AFTER_ACCEPT = '/connexion?invitation=acceptee';
+
+function loginPath(tenantSlug: string | undefined): string {
+  return tenantSlug && TENANT_SLUG.test(tenantSlug) ? `${LOGIN_AFTER_ACCEPT}&etablissement=${tenantSlug}` : LOGIN_AFTER_ACCEPT;
+}
+
 /** C6 : l'invité définit son mot de passe ; le jeton à usage unique reste dans le chemin de l'appel. */
 export async function acceptInvitationAction(_prev: FormState, formData: FormData): Promise<FormState> {
   const flat = formDataToFlat(formData);
@@ -23,5 +31,5 @@ export async function acceptInvitationAction(_prev: FormState, formData: FormDat
   } catch (error) {
     return failureState(error);
   }
-  redirect('/connexion?invitation=acceptee');
+  redirect(loginPath(flat.tenantSlug));
 }

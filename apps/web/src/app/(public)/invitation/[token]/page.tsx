@@ -13,11 +13,11 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
-async function loadInvitation(token: string): Promise<{ email: string; fullName: string; tenantName: string } | { error: string }> {
+async function loadInvitation(token: string): Promise<{ email: string; fullName: string; tenantName: string; tenantSlug: string } | { error: string }> {
   try {
     const { data } = await publicRequest(`/auth/invitations/${encodeURIComponent(token)}`);
     const record = typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {};
-    return { email: text(record.email), fullName: text(record.fullName), tenantName: text(record.tenantName) };
+    return { email: text(record.email), fullName: text(record.fullName), tenantName: text(record.tenantName), tenantSlug: text(record.tenantSlug) };
   } catch (error) {
     if (!isApiError(error)) throw error;
     return { error: error.status === 404 ? describeApiError({ status: 410, code: 'invitation_expired' }) : describeApiError(error) };
@@ -39,11 +39,16 @@ export default async function InvitationPage({ params }: { readonly params: Prom
       ) : (
         <>
           <p className="text-sm text-slate-800">
-            {invitation.fullName ? <strong>{invitation.fullName}</strong> : 'Vous'}
+            {invitation.fullName ? <><strong>{invitation.fullName}</strong>, vous</> : 'Vous'}
             {invitation.tenantName ? <> êtes invité(e) à rejoindre <strong>{invitation.tenantName}</strong>.</> : ' êtes invité(e).'}
             {invitation.email ? <> Compte : {invitation.email}.</> : null} Choisissez votre mot de passe.
           </p>
-          <InvitationForm token={token} />
+          {invitation.tenantSlug ? (
+            <p className="text-sm text-slate-800">
+              Code établissement à saisir à la connexion : <strong className="font-mono">{invitation.tenantSlug}</strong>
+            </p>
+          ) : null}
+          <InvitationForm token={token} tenantSlug={invitation.tenantSlug} />
         </>
       )}
     </div>

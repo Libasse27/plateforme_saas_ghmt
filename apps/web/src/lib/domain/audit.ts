@@ -166,6 +166,17 @@ export function isSameOrigin(origin: string | null, host: string | null): boolea
   }
 }
 
+/**
+ * Anti-CSRF de l'export : Fetch Metadata d'abord (`Sec-Fetch-Site`, posé par le navigateur et non falsifiable
+ * par un site tiers). Il reste fiable quand `Referrer-Policy: no-referrer` fait envoyer `Origin: null` aux
+ * formulaires POST. Sans cet en-tête (navigateur ancien), repli sur la comparaison Origin / hôte.
+ */
+export function isSameOriginRequest(headers: Headers): boolean {
+  const fetchSite = headers.get('sec-fetch-site');
+  if (fetchSite !== null) return fetchSite === 'same-origin';
+  return isSameOrigin(headers.get('origin'), headers.get('x-forwarded-host') ?? headers.get('host'));
+}
+
 const SAFE_DISPOSITION = /^attachment; filename="[A-Za-z0-9._-]{1,100}\.csv"$/;
 const FALLBACK_DISPOSITION = 'attachment; filename="journal-audit.csv"';
 const CSV_TYPE = 'text/csv; charset=utf-8';

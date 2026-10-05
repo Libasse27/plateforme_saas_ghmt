@@ -58,6 +58,19 @@ describe('POST /administration/journal/export', () => {
     expect((await POST(exportRequest({}, { host: 'localhost:3001' }))).status).toBe(403);
     expect(calls).toHaveLength(0);
   });
+  it('Origin « null » (Referrer-Policy no-referrer) mais Sec-Fetch-Site same-origin : export accepté', async () => {
+    stubApi((c) => (c.path === '/audit-logs/export' ? csvResponse() : undefined));
+    const response = await POST(exportRequest({}, { origin: 'null', host: 'localhost:3001', 'sec-fetch-site': 'same-origin' }));
+    expect(response.status).toBe(200);
+  });
+  it('Sec-Fetch-Site cross-site, same-site ou none : 403 même avec une origine identique', async () => {
+    const { calls } = stubApi(() => csvResponse());
+    for (const site of ['cross-site', 'same-site', 'none']) {
+      const response = await POST(exportRequest({}, { origin: 'http://localhost:3001', host: 'localhost:3001', 'sec-fetch-site': site }));
+      expect(response.status).toBe(403);
+    }
+    expect(calls).toHaveLength(0);
+  });
   it('hôte transmis par le proxy (x-forwarded-host)', async () => {
     stubApi((c) => (c.path === '/audit-logs/export' ? csvResponse() : undefined));
     const response = await POST(exportRequest({}, { origin: 'https://app.ghmt.sn', host: 'internal:3001', 'x-forwarded-host': 'app.ghmt.sn' }));

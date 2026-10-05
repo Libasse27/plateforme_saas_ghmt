@@ -9,6 +9,7 @@ import {
   exportFailureMessage,
   exportHeaders,
   isSameOrigin,
+  isSameOriginRequest,
   OUTCOME_LABELS,
   parseAuditFilters,
   toAuditLog,
@@ -112,6 +113,20 @@ describe('export CSV : contrôle d\'origine', () => {
     expect(isSameOrigin(null, 'app.ghmt.sn')).toBe(false);
     expect(isSameOrigin('null', 'app.ghmt.sn')).toBe(false);
     expect(isSameOrigin('https://app.ghmt.sn', null)).toBe(false);
+  });
+  it('Fetch Metadata prioritaire : seul same-origin passe, quelle que soit l\'origine', () => {
+    const headers = (h: Record<string, string>) => new Headers({ host: 'app.ghmt.sn', ...h });
+    expect(isSameOriginRequest(headers({ 'sec-fetch-site': 'same-origin', origin: 'null' }))).toBe(true);
+    expect(isSameOriginRequest(headers({ 'sec-fetch-site': 'same-origin' }))).toBe(true);
+    expect(isSameOriginRequest(headers({ 'sec-fetch-site': 'same-site', origin: 'https://app.ghmt.sn' }))).toBe(false);
+    expect(isSameOriginRequest(headers({ 'sec-fetch-site': 'cross-site', origin: 'https://app.ghmt.sn' }))).toBe(false);
+    expect(isSameOriginRequest(headers({ 'sec-fetch-site': 'none' }))).toBe(false);
+  });
+  it('sans Fetch Metadata : repli sur Origin comparé à l\'hôte (x-forwarded-host prioritaire)', () => {
+    expect(isSameOriginRequest(new Headers({ host: 'app.ghmt.sn', origin: 'https://app.ghmt.sn' }))).toBe(true);
+    expect(isSameOriginRequest(new Headers({ host: 'internal:3001', 'x-forwarded-host': 'app.ghmt.sn', origin: 'https://app.ghmt.sn' }))).toBe(true);
+    expect(isSameOriginRequest(new Headers({ host: 'app.ghmt.sn', origin: 'null' }))).toBe(false);
+    expect(isSameOriginRequest(new Headers({ host: 'app.ghmt.sn' }))).toBe(false);
   });
   it('transmet type et nom de fichier, impose no-store et nosniff', () => {
     const headers = exportHeaders(new Headers({ 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="journal-audit-20261001-20261005.csv"', 'set-cookie': 'x=1' }));

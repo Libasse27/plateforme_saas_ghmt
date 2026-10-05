@@ -43,6 +43,29 @@ describe('TotpEnrolment', () => {
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
   });
 
+  it('garde les codes de secours affichés quand la page serveur se rafraîchit avec le facteur désormais actif', async () => {
+    start.mockResolvedValue({ ok: true, extra: { qrDataUrl: 'data:image/svg+xml;charset=utf-8,x', secret: 'S' } });
+    activate.mockResolvedValue({ ok: true, message: 'Authentification à deux facteurs activée.', extra: { backupCodes: ['ABCDE23456'] } });
+    const user = userEvent.setup();
+    const { rerender } = render(<TotpEnrolment alreadyActive={false} />);
+    await user.click(screen.getByRole('button', { name: 'Générer le QR code' }));
+    await user.type(await screen.findByLabelText(/Code à 6 chiffres/), '123456');
+    await user.click(screen.getByRole('button', { name: /Activer/ }));
+    await screen.findByRole('list', { name: 'Codes de secours' });
+
+    // Le cookie de session réécrit par l'action rafraîchit la page serveur, qui voit maintenant le facteur actif.
+    rerender(<TotpEnrolment alreadyActive />);
+    expect(screen.getByRole('list', { name: 'Codes de secours' })).toHaveTextContent('ABCDE23456');
+    expect(screen.queryByText(/déjà active/)).not.toBeInTheDocument();
+  });
+
+  it('facteur déjà actif à l\'ouverture : message et retour, sans nouvel enrôlement', () => {
+    render(<TotpEnrolment alreadyActive />);
+    expect(screen.getByText(/déjà active/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Retour au tableau de bord' })).toHaveAttribute('href', '/');
+    expect(screen.queryByRole('button', { name: 'Générer le QR code' })).not.toBeInTheDocument();
+  });
+
   it('affiche l\'erreur de code invalide sans quitter l\'étape de saisie', async () => {
     start.mockResolvedValue({ ok: true, extra: { qrDataUrl: 'data:image/svg+xml;charset=utf-8,x', secret: 'S' } });
     activate.mockResolvedValue({ ok: false, message: 'Code invalide ou expiré.', fieldErrors: { code: 'Code invalide.' } });

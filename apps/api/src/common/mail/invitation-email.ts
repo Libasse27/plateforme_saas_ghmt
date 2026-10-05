@@ -4,6 +4,7 @@ export interface InvitationEmailParams {
   readonly to: string;
   readonly fullName: string;
   readonly tenantName: string;
+  readonly tenantSlug: string;
   readonly webUrl: string;
   readonly token: string;
   readonly ttlHours: number;
@@ -27,6 +28,8 @@ export function buildInvitationEmail(params: InvitationEmailParams): MailMessage
     'Pour définir votre mot de passe et activer votre compte, ouvrez le lien suivant :',
     link,
     '',
+    `Code établissement à saisir à la connexion : ${params.tenantSlug}`,
+    '',
     `Ce lien est personnel, à usage unique et valable ${params.ttlHours} heures.`,
     'Si vous n’attendiez pas cette invitation, ignorez ce message.',
   ].join('\n');
@@ -34,6 +37,7 @@ export function buildInvitationEmail(params: InvitationEmailParams): MailMessage
     `<p>Bonjour ${escapeHtml(params.fullName)},</p>` +
     `<p>Un compte vous a été créé sur la plateforme GHMT de ${escapeHtml(params.tenantName)}.</p>` +
     `<p><a href="${escapeHtml(link)}">Définir mon mot de passe</a></p>` +
+    `<p>Code établissement à saisir à la connexion : <strong>${escapeHtml(params.tenantSlug)}</strong></p>` +
     `<p>Ce lien est personnel, à usage unique et valable ${params.ttlHours} heures. ` +
     'Si vous n’attendiez pas cette invitation, ignorez ce message.</p>';
   return { to: params.to, subject: `Invitation à rejoindre GHMT — ${params.tenantName}`, text, html };

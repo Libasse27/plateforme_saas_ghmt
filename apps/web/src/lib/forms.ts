@@ -12,7 +12,8 @@ export interface FormState {
 
 export const EMPTY_FORM_STATE: FormState = {};
 
-const SENSITIVE_FIELDS: ReadonlySet<string> = new Set(['password', 'confirmPassword', 'admin.password', 'admin.confirmPassword', 'currentPassword', 'newPassword', 'code']);
+/** Champs jamais renvoyés au formulaire. Les codes TOTP n'y sont pas : les actions MFA ne renvoient aucune valeur. */
+const SENSITIVE_FIELDS: ReadonlySet<string> = new Set(['password', 'confirmPassword', 'admin.password', 'admin.confirmPassword', 'currentPassword', 'newPassword']);
 const FORBIDDEN_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 
 type Nested = { [key: string]: string | Nested };

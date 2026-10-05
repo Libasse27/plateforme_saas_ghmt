@@ -624,3 +624,18 @@ Aucune. Décision de l'orchestrateur (2026-10-05) : le bloc de saisie du consent
 - **Liens in-app** : motif `^/(?!/)[A-Za-z0-9/_-]*$` (SQL et web). `notification_due_tenants` : `p_limit` borné à 1..500.
 - **Audit** : `GET /audit-logs/verify` limité par utilisateur (3/min) et à une vérification concurrente par établissement (429 `verification_in_progress`).
 - **Registre `platform.sms_recipient_tenants`** : table de routage des STOP (HMAC du numéro × établissement × dernier envoi). La clé est globale, dérivée de `BLIND_INDEX_KEY` par `HMAC(BLIND_INDEX_KEY, 'ghmt:notifications:recipient')` (le libellé de dérivation est versionné : tout changement impose une migration de recalcul) ; elle est donc indépendante du tenant, par nécessité du routage. Accès réservé à `ghmt_platform` (`PlatformDb`), aucun droit pour `ghmt_app` ; purge au-delà de 180 jours.
+
+## 15. Parcours de la console web dans un navigateur (2026-10-05)
+Parcours réel (Chrome, trois comptes en contextes isolés) : inscription d'un établissement, enrôlement TOTP obligatoire de l'administrateur, tableau de bord, organisation (nom de site « Centre VIH » refusé), invitation d'un caissier à portée site puis d'un directeur, révocation des sessions (le caissier est renvoyé à la connexion à la navigation suivante), rôle personnalisé par la matrice (cases non détenues grisées), praticien, journal d'audit (vérification « intègre », export), boîte et préférences de notification. Aucune erreur dans la console du navigateur.
+
+**Défauts trouvés et corrigés (tests de non-régression ajoutés)** :
+- **Export CSV du journal toujours refusé (403)** : `Referrer-Policy: no-referrer` fait envoyer `Origin: null` aux formulaires POST. Le Route Handler s'appuie désormais d'abord sur Fetch Metadata (`Sec-Fetch-Site` : seul `same-origin` passe ; `same-site`, `cross-site` et `none` ⇒ 403), puis, en l'absence de cet en-tête, sur la comparaison Origin / hôte (`isSameOriginRequest`).
+- **Codes de secours TOTP jamais affichés** : l'activation réécrit le cookie de session, la page serveur se rafraîchit, voit le facteur actif et démontait le composant avant l'affichage des codes. La branche « déjà active » est passée dans `TotpEnrolment` (prop `alreadyActive`), qui reste monté.
+- **Code établissement introuvable pour un invité** : l'aperçu `GET /auth/invitations/{token}` renvoie `tenantSlug` ; l'e-mail d'invitation et la page d'acceptation l'affichent ; après acceptation, la connexion est pré-remplie (`/connexion?invitation=acceptee&etablissement=<slug>`, slug validé par expression régulière avant d'entrer dans l'URL).
+- **Champ « Code » vidé après une erreur de validation** (sites, services, caisses, tarifs, plans, rôles) : `code` ne fait plus partie des champs jamais renvoyés au formulaire (aucune action MFA ne renvoie de valeurs).
+- Coquille : « Prénom Nom, vous êtes invité(e)… ».
+
+**Constats laissés en l'état** :
+- §12.2 attend qu'un caissier voie sa section caisse dans `/administration`, mais la table des permissions (§4) ne donne pas `reports:dashboard:read` au caissier : il reçoit « Vous n'avez pas accès ». Comportement conforme à la table ; la contradiction du scénario est à trancher.
+- La matrice des rôles affiche les ressources par leur code technique anglais (`entry`, `cash_session`…) : libellés français à prévoir.
+- `minio/minio:latest` n'est plus disponible sur Docker Hub : `pnpm infra:up` échoue tant que l'image n'est pas remplacée (les autres services démarrent avec `docker compose up -d postgres redis mailpit`).

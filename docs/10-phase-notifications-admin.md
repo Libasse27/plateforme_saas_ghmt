@@ -594,7 +594,7 @@ Pour chaque point : test rouge, puis vert, puis refactorisation. Chaque endpoint
 **Préparation** : `pnpm infra:up` ; `.env` de dev avec `SMS_PROVIDER=sandbox`, `NOTIFICATIONS_WORKER_ENABLED=true` et `PAYMENTS_SANDBOX_ENABLED=true` ; `pnpm prisma:deploy && node prisma/seed.mts` ; `pnpm dev` (API et web).
 
 1. **Établissement existant** (créé avant la phase) : l'administrateur voit « Journal d'audit » et peut exporter (rattrapage A).
-2. `/administration` : les cartes affichent des comptes cohérents. Avec un compte caissier limité à un site, seule la section caisse et recettes de son site apparaît.
+2. `/administration` : les cartes affichent des comptes cohérents. Avec un compte directeur, les recettes apparaissent et le sélecteur de site filtre les sections ; un caissier n'a pas `reports:dashboard:read` (§4) et reçoit « Vous n'avez pas accès » (décision du 2026-10-05 : il utilise l'écran Caisse).
 3. **Organisation** : création d'un site et d'un service. **Utilisateurs** : invitation (e-mail visible dans Mailpit), acceptation, affectation d'un rôle à portée site, désactivation puis réactivation, révocation des sessions (l'utilisateur est déconnecté). **Rôles** : création d'un rôle personnalisé par la matrice. **Praticiens** : création liée à l'utilisateur.
 4. **Rappels** (via l'API) :
    - patient avec téléphone, puis `POST /patients/{id}/contact-consents { channel: 'sms', granted: true, … }` ;
@@ -636,6 +636,6 @@ Parcours réel (Chrome, trois comptes en contextes isolés) : inscription d'un �
 - Coquille : « Prénom Nom, vous êtes invité(e)… ».
 
 **Constats laissés en l'état** :
-- §12.2 attend qu'un caissier voie sa section caisse dans `/administration`, mais la table des permissions (§4) ne donne pas `reports:dashboard:read` au caissier : il reçoit « Vous n'avez pas accès ». Comportement conforme à la table ; la contradiction du scénario est à trancher.
+- §12.2 attendait qu'un caissier voie sa section caisse dans `/administration`, contrairement à la table des permissions (§4). Décision du 2026-10-05 : la table fait foi (le caissier utilise l'écran Caisse) ; §12.2 est corrigé.
 - La matrice des rôles affiche les ressources par leur code technique anglais (`entry`, `cash_session`…) : libellés français à prévoir.
 - `minio/minio:latest` n'est plus disponible sur Docker Hub : `pnpm infra:up` échoue tant que l'image n'est pas remplacée (les autres services démarrent avec `docker compose up -d postgres redis mailpit`).

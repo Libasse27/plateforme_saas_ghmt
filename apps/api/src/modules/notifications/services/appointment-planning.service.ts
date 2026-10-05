@@ -20,6 +20,7 @@ interface PlanningState {
   readonly timeZone: string;
   readonly settings: EffectiveSettings;
   readonly contact: ContactFacts;
+  readonly locale: 'fr' | 'en';
 }
 
 /**
@@ -60,7 +61,7 @@ export class AppointmentPlanningService {
   }
 
   /** Rattrapage : recrée les rappels attendus manquants, encore à plus de `minLeadMs` de l'envoi (balayeur). */
-  async planMissingReminders(tx: TenantTx, tenantId: string, appointmentId: string, now: Date, minLeadMs: number): Promise<number> {
+  async planMissingReminders(tx: TenantTx, tenantId: string, appointmentId: string, now: Date, minLeadMs: number, mode: ConflictMode = 'skip'): Promise<number> {
     const state = await this.loadState(tx, tenantId, appointmentId);
     if (!state || !ACTIVE_STATUSES.has(state.appointment.status) || state.appointment.deletedAt !== null) return 0;
     const planned = planAppointmentNotifications({
@@ -74,7 +75,19 @@ export class AppointmentPlanningService {
       contact: state.contact,
       deceased: state.patient.deceasedAt !== null || state.patient.deletedAt !== null,
     }).filter((entry) => REMINDER_TYPES.has(entry.typeCode) && entry.scheduledAt.getTime() > now.getTime() + minLeadMs);
-    return this.insertAll(tx, tenantId, planned, state, null, 'skip', now);
+    return this.insertAll(tx, tenantId, planned, state, null, mode, now);
+  }
+
+  /** Replanifie les rendez-vous futurs actifs d'un patient (changement de consentement) ; idempotent grâce à la déduplication. */
+  async replanPatientReminders(tx: TenantTx, tenantId: string, patientId: string, now: Date, mode: ConflictMode): Promise<number> {
+    const appointments = await tx.appointment.findMany({
+      where: { tenantId, patientId, deletedAt: null, status: { in: ['scheduled', 'confirmed'] }, startsAt: { gt: now } },
+      select: { id: true },
+      orderBy: { startsAt: 'asc' },
+    });
+    let written = 0;
+    for (const { id } of appointments) written += await this.planMissingReminders(tx, tenantId, id, now, 0, mode);
+    return written;
   }
 
   private async cancelPendingReminders(tx: TenantTx, tenantId: string, eventType: AppointmentEventType, state: PlanningState, startsAt: Date, current: boolean, now: Date): Promise<void> {
@@ -99,8 +112,10 @@ export class AppointmentPlanningService {
       hasEmail: patient.emailEnc !== null,
       smsConsent: consents.sms?.granted === true,
       emailConsent: consents.email?.granted === true,
+      smsStopped: consents.sms?.source === 'sms_stop' && consents.sms.granted === false,
     };
-    return { appointment, patient, timeZone: appointment.site.timezone ?? tenant.timezone, settings, contact };
+    const locale = await this.settingsRepo.tenantLocale(tx);
+    return { appointment, patient, timeZone: appointment.site.timezone ?? tenant.timezone, settings, contact, locale };
   }
 
   private async insertAll(tx: TenantTx, tenantId: string, planned: readonly PlannedNotification[], state: PlanningState, eventId: string | null, reminderMode: ConflictMode, now: Date): Promise<number> {
@@ -124,7 +139,7 @@ export class AppointmentPlanningService {
       subjectVersion: entry.subjectVersion,
       sourceEventId: eventId,
       dedupKey: dedupKey({ tenantId, sourceKey: entry.sourceKey, typeCode: entry.typeCode, recipientType: 'patient', recipientId: state.patient.id, channel: entry.channel, variant: entry.variant }),
-      locale: 'fr',
+      locale: state.locale,
       context: {},
       suppressionReason: entry.suppressionReason,
       scheduledAt: entry.scheduledAt,

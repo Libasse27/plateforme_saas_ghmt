@@ -88,3 +88,12 @@ describe('decideEarly', () => {
     });
   });
 });
+
+describe('decideEarly : STOP', () => {
+  it('supprime un SMS transactionnel quand le STOP est en vigueur (channel_disabled)', () => {
+    const confirmation: DecisionInput = { ...reminder, typeCode: 'appointment.confirmed', category: 'transactional', smsStopped: true };
+
+    expect(decideEarly(confirmation)).toEqual({ kind: 'suppress', reason: 'channel_disabled' });
+    expect(decideEarly({ ...confirmation, channel: 'email' })).toBeNull();
+  });
+});

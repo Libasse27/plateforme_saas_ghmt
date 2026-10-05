@@ -28,6 +28,8 @@ export interface ContactFacts {
   readonly hasEmail: boolean;
   readonly smsConsent: boolean;
   readonly emailConsent: boolean;
+  /** Un STOP est en vigueur : aucun SMS, transactionnel compris (docs/10 D10). */
+  readonly smsStopped?: boolean;
 }
 
 export interface ChannelChoice {
@@ -49,7 +51,7 @@ export function chooseChannel(category: NotificationCategory, contact: ContactFa
     if (contact.hasEmail && contact.emailConsent) return send('email');
     return suppress(contact.hasPhone ? 'sms' : 'email', 'no_consent');
   }
-  if (contact.hasPhone && settings.appointmentSmsEnabled) return send('sms');
+  if (contact.hasPhone && settings.appointmentSmsEnabled && !contact.smsStopped) return send('sms');
   if (contact.hasEmail) return send('email');
   return suppress('sms', 'channel_disabled');
 }

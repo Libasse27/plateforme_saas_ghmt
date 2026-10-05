@@ -39,10 +39,12 @@ describe('appointmentSuppression : messages transactionnels', () => {
     }
   });
 
-  it('la confirmation part même si l’horaire a changé depuis (le report a son propre message)', () => {
+  it('la confirmation et le report sont périmés (stale) si l’horaire a changé depuis : ils annonceraient une heure fausse', () => {
     const moved = { ...live, startsAt: new Date('2026-10-09T14:00:00Z') };
 
-    expect(appointmentSuppression('appointment.confirmed', VERSION, moved)).toBeNull();
+    expect(appointmentSuppression('appointment.confirmed', VERSION, moved)).toBe('stale');
+    expect(appointmentSuppression('appointment.rescheduled', VERSION, moved)).toBe('stale');
+    expect(appointmentSuppression('appointment.rescheduled', VERSION, live)).toBeNull();
   });
 
   it('l’avis d’annulation part pour un rendez-vous annulé', () => {

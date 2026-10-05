@@ -7,9 +7,10 @@ import { TenantDb } from '../../../infrastructure/prisma/tenant-db.service';
 import { decideAfterFailure } from '../domain/retry-policy';
 import { LEASE_MS, MAX_BATCHES_PER_TICK } from '../notifications.constants';
 import { NotificationsRepository } from '../repositories/notifications.repository';
-import { ChannelSender, type PreparedSend, type SendOutcome } from './channel-sender';
+import { ChannelSender, type SendOutcome } from './channel-sender';
 import { DeliveryPreparer } from './delivery-preparer';
 import { DeliveryRecorder, type FailureResult } from './delivery-recorder';
+import { RecipientHasher } from './recipient-hasher';
 import { SmsRecipientRegistry } from './sms-recipient-registry';
 
 export interface DeliveryReport {
@@ -33,6 +34,7 @@ export class NotificationDeliveryService {
     private readonly sender: ChannelSender,
     private readonly recorder: DeliveryRecorder,
     private readonly registry: SmsRecipientRegistry,
+    private readonly hasher: RecipientHasher,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -65,9 +67,14 @@ export class NotificationDeliveryService {
     }
     const prepared = await this.db.runAs(tenantId, (tx) => this.preparer.prepare(tx, row, now));
     if (!prepared) return;
+    // Routage STOP AVANT l'envoi : si l'enregistrement échoue, rien n'est envoyé et la ligne est reprogrammée.
+    if (prepared.channel === 'sms') await this.registry.touch(this.hasher.hash(prepared.address), tenantId, now);
+    if (!(await this.renewLease(tenantId, row, now))) {
+      this.logger.warn({ notificationId: row.id, typeCode: row.typeCode, channel: row.channel }, 'Bail perdu avant l’envoi : abandon');
+      return;
+    }
     const outcome = await this.sender.send(prepared);
     await this.db.runAs(tenantId, (tx) => this.recordOutcome(tx, row, outcome, now));
-    if (outcome.ok && prepared.channel === 'sms') await this.rememberRecipient(prepared, outcome, now);
     this.logger.debug({ notificationId: row.id, typeCode: row.typeCode, channel: row.channel, status: outcome.ok ? 'sent' : 'error' }, 'Notification traitée');
   }
 
@@ -94,12 +101,13 @@ export class NotificationDeliveryService {
     return { kind: 'final', error: { errorClass: outcome.error.errorClass, errorCode: decision.errorCode } };
   }
 
-  private async rememberRecipient(prepared: PreparedSend, outcome: Extract<SendOutcome, { ok: true }>, now: Date): Promise<void> {
-    try {
-      await this.registry.touch(outcome.result.recipientHashBytes, prepared.tenantId, now);
-    } catch (error: unknown) {
-      this.logger.warn({ notificationId: prepared.notificationId, errorCode: errorName(error) }, 'Enregistrement du routage STOP impossible');
-    }
+  /**
+   * Renouvelle le bail ligne par ligne juste avant l'appel du fournisseur (durée à partir de l'heure réelle : un lot lent ne
+   * fait pas expirer les lignes suivantes sans qu'on le sache). 0 ligne ⇒ un autre processus l'a reprise : pas d'envoi.
+   */
+  private renewLease(tenantId: string, row: Notification, now: Date): Promise<boolean> {
+    const until = new Date(Math.max(now.getTime(), Date.now()) + LEASE_MS);
+    return this.db.runAs(tenantId, (tx) => this.notifications.renewLease(tx, row, until));
   }
 
   private async recordUnexpected(tenantId: string, row: Notification, now: Date): Promise<void> {

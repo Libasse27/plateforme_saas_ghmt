@@ -6,7 +6,7 @@ import { ConsentsController } from './controllers/consents.controller';
 import { DeliveriesController } from './controllers/deliveries.controller';
 import { InboxController } from './controllers/inbox.controller';
 import { SettingsController } from './controllers/settings.controller';
-import { SmsWebhooksController } from './controllers/sms-webhooks.controller';
+import { SmsSandboxWebhooksController, SmsWebhooksController } from './controllers/sms-webhooks.controller';
 import { TemplatesController } from './controllers/templates.controller';
 import { NotificationRetentionJob } from './jobs/notification-retention.job';
 import { ReminderSweeperJob } from './jobs/reminder-sweeper.job';
@@ -70,12 +70,15 @@ const DELIVERY_PIPELINE = [
   TemplatesService,
 ];
 
+/** Routes sandbox non signées : jamais enregistrées sans activation explicite (lue avant l'injection, comme le choix des contrôleurs). */
+const SANDBOX_CONTROLLERS = process.env['SMS_SANDBOX_WEBHOOKS_ENABLED'] === 'true' ? [SmsSandboxWebhooksController] : [];
+
 const JOBS = [NotificationRetentionJob, ReminderSweeperJob, SaasDunningJob];
 
 /** Notifications : outbox, dispatcher, canaux, rappels et relances (docs/10 §5). */
 @Module({
   imports: [ScheduleModule.forRoot()],
-  controllers: [InboxController, SettingsController, TemplatesController, DeliveriesController, ConsentsController, SmsWebhooksController],
+  controllers: [InboxController, SettingsController, TemplatesController, DeliveriesController, ConsentsController, SmsWebhooksController, ...SANDBOX_CONTROLLERS],
   providers: [
     { provide: SMS_PROVIDER_TOKEN, inject: [ENV, MAILER], useFactory: (env: Env, mailer: Mailer) => createSmsProvider(env, mailer, fetch) },
     ...REPOSITORIES,

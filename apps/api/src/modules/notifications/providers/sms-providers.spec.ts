@@ -38,6 +38,18 @@ describe('HttpSmsProvider', () => {
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
+  it('envoie Idempotency-Key (clientRef), refuse les redirections et borne la lecture de la réponse', async () => {
+    const huge = new Response(`{"id":"${'x'.repeat(100_000)}"}`, { status: 200 });
+    const fetchMock = vi.fn().mockResolvedValue(huge);
+
+    const result = await new HttpSmsProvider(CONFIG, fetchMock).send(REQUEST);
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect((init.headers as Record<string, string>)['idempotency-key']).toBe(REQUEST.clientRef);
+    expect(init.redirect).toBe('error');
+    expect(result).toEqual({ providerMessageId: null });
+  });
+
   it('accepte une réponse 2xx sans identifiant', async () => {
     const provider = new HttpSmsProvider(CONFIG, vi.fn().mockResolvedValue(new Response(null, { status: 202 })));
 

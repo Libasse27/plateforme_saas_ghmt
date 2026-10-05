@@ -22,7 +22,7 @@ export interface NewNotification {
   readonly deadlineAt: Date | null;
 }
 
-export type ConflictMode = 'skip' | 'reactivate_stale';
+export type ConflictMode = 'skip' | 'reactivate_stale' | 'reactivate_no_consent';
 
 /**
  * Réactivation d'une ligne supprimée `stale` (retour à l'horaire initial d'un rendez-vous, docs/10 D8) : seule cette
@@ -34,7 +34,18 @@ const REACTIVATE_STALE = Prisma.sql`
     scheduled_at = EXCLUDED.scheduled_at, next_attempt_at = EXCLUDED.next_attempt_at, deadline_at = EXCLUDED.deadline_at,
     attempts = 0, locked_until = NULL, error_class = NULL, error_code = NULL, updated_at = now()
   WHERE tenant.notifications.status = 'suppressed' AND tenant.notifications.suppression_reason = 'stale' AND EXCLUDED.status = 'queued'`;
-const SKIP_DUPLICATES = Prisma.sql`ON CONFLICT (tenant_id, dedup_key) DO NOTHING`;
+/** Octroi d'un consentement : une ligne supprimée faute de consentement redevient attendue (même clé de déduplication). */
+const REACTIVATE_NO_CONSENT = Prisma.sql`
+  ON CONFLICT (tenant_id, dedup_key) DO UPDATE SET
+    status = 'queued', suppression_reason = NULL, suppressed_at = NULL,
+    scheduled_at = EXCLUDED.scheduled_at, next_attempt_at = EXCLUDED.next_attempt_at, deadline_at = EXCLUDED.deadline_at,
+    attempts = 0, locked_until = NULL, error_class = NULL, error_code = NULL, updated_at = now()
+  WHERE tenant.notifications.status = 'suppressed' AND tenant.notifications.suppression_reason = 'no_consent' AND EXCLUDED.status = 'queued'`;
+const CONFLICT_CLAUSES: Readonly<Record<'skip' | 'reactivate_stale' | 'reactivate_no_consent', Prisma.Sql>> = {
+  skip: Prisma.sql`ON CONFLICT (tenant_id, dedup_key) DO NOTHING`,
+  reactivate_stale: REACTIVATE_STALE,
+  reactivate_no_consent: REACTIVATE_NO_CONSENT,
+};
 
 @Injectable()
 export class NotificationsRepository {
@@ -53,7 +64,7 @@ export class NotificationsRepository {
         ${suppressed ? 'suppressed' : 'queued'}, ${row.suppressionReason}, ${row.scheduledAt}::timestamptz,
         ${row.scheduledAt}::timestamptz, ${row.deadlineAt}::timestamptz, ${suppressed ? now : null}::timestamptz,
         ${now}::timestamptz, ${now}::timestamptz)
-      ${mode === 'reactivate_stale' ? REACTIVATE_STALE : SKIP_DUPLICATES}`;
+      ${CONFLICT_CLAUSES[mode]}`;
   }
 
   /** Réserve des notifications dues (`FOR UPDATE SKIP LOCKED`) en posant un bail ; sûr avec plusieurs instances. */
@@ -68,6 +79,16 @@ export class NotificationsRepository {
       RETURNING id::text AS id`;
     if (reserved.length === 0) return [];
     return tx.notification.findMany({ where: { tenantId, id: { in: reserved.map((r) => r.id) } }, orderBy: [{ nextAttemptAt: 'asc' }, { id: 'asc' }] });
+  }
+
+  /** Renouvelle le bail seulement s'il est toujours celui posé à la réservation (0 ligne ⇒ un autre processus a repris la ligne). */
+  async renewLease(tx: TenantTx, row: Pick<Notification, 'tenantId' | 'id' | 'lockedUntil'>, until: Date): Promise<boolean> {
+    if (row.lockedUntil === null) return false;
+    const { count } = await tx.notification.updateMany({
+      where: { tenantId: row.tenantId, id: row.id, status: 'queued', lockedUntil: row.lockedUntil },
+      data: { lockedUntil: until },
+    });
+    return count > 0;
   }
 
   findById(tx: TenantTx, tenantId: string, id: string): Promise<Notification | null> {
@@ -94,22 +115,20 @@ export class NotificationsRepository {
     return this.suppressWhere(tx, { tenantId, subjectType: 'saas_invoice', subjectId: invoiceId }, 'invoice_settled', now);
   }
 
-  /** Rappels supprimés `no_consent` d'un patient et d'un canal, ré-armés par un nouveau consentement (non encore périmés). */
-  async reactivateNoConsent(tx: TenantTx, tenantId: string, patientId: string, channel: NotificationChannel, now: Date): Promise<number> {
-    const { count } = await tx.notification.updateMany({
-      where: {
-        tenantId,
-        recipientType: 'patient',
-        recipientId: patientId,
-        category: 'clinical_reminder',
-        channel,
-        status: 'suppressed',
-        suppressionReason: 'no_consent',
-        scheduledAt: { gt: now },
-      },
-      data: { status: 'queued', suppressionReason: null, suppressedAt: null, attempts: 0, lockedUntil: null, updatedAt: now },
-    });
-    return count;
+  /**
+   * Un même rappel ne part que sur un canal : quand le SMS est (ré)activé, l'e-mail en attente du même rappel
+   * (même rendez-vous, type et version) est supprimé.
+   */
+  async suppressDuplicateChannelReminders(tx: TenantTx, tenantId: string, patientId: string, now: Date): Promise<number> {
+    return tx.$executeRaw`
+      UPDATE tenant.notifications e SET status = 'suppressed', suppression_reason = 'stale', suppressed_at = ${now}::timestamptz,
+        locked_until = NULL, updated_at = ${now}::timestamptz
+      WHERE e.tenant_id = ${tenantId}::uuid AND e.recipient_id = ${patientId}::uuid AND e.category = 'clinical_reminder'
+        AND e.channel = 'email' AND e.status = 'queued'
+        AND EXISTS (
+          SELECT 1 FROM tenant.notifications s
+          WHERE s.tenant_id = e.tenant_id AND s.recipient_id = e.recipient_id AND s.type_code = e.type_code
+            AND s.subject_id = e.subject_id AND s.subject_version = e.subject_version AND s.channel = 'sms' AND s.status = 'queued')`;
   }
 
   private async suppressWhere(tx: TenantTx, where: Prisma.NotificationWhereInput, reason: SuppressionReason, now: Date): Promise<number> {

@@ -510,3 +510,4 @@ Hors périmètre de la phase (docs/10 §1.3), renvoyé à la roadmap.
 | Audit | Vérificateur planifié quotidien et ancrage WORM ; rétention par plan ; vue « qui a consulté ce patient » | docs/10 §1.3 |
 | Notifications des autres modules | Laboratoire, stock, caisse, `auth.*` | docs/10 §1.3 |
 | Droits du plan | Gating du plan sur la surcharge de modèles de notification (Professional et plus) | docs/10 §1.3 |
+- **Consentement des mineurs et des tuteurs** (rappels de rendez-vous) : qui consent, pour quel numéro, et comment le STOP d'un tuteur s'applique à plusieurs patients. Le MVP traite chaque patient séparément ; un changement de numéro réinitialise le consentement SMS (revue santé, 2026-10-05).

@@ -37,7 +37,7 @@ export const CONSENT_CHANNELS = ['sms', 'email'] as const;
 export type ConsentChannel = (typeof CONSENT_CHANNELS)[number];
 export const CONSENT_PURPOSES = ['appointment_reminder'] as const;
 export type ConsentPurpose = (typeof CONSENT_PURPOSES)[number];
-export const CONSENT_SOURCES = ['front_desk', 'patient_request', 'sms_stop'] as const;
+export const CONSENT_SOURCES = ['front_desk', 'patient_request', 'sms_stop', 'phone_change'] as const;
 export type ConsentSource = (typeof CONSENT_SOURCES)[number];
 
 export const SMS_PROVIDERS = ['none', 'sandbox', 'http'] as const;

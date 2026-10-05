@@ -160,10 +160,10 @@ describe('modèles de notification', () => {
     });
 
     it('une nouvelle surcharge après réinitialisation reprend la numérotation (version 2)', async () => {
-      await put(a.adminToken, 'appointment.reminder_d1/sms/fr', { body: '{{etablissement.nom}} : rappel rdv {{rdv.date}}.' }).expect(200);
+      await put(a.adminToken, 'appointment.reminder_d1/sms/fr', { body: '{{etablissement.nom}} : rappel rdv {{rdv.date}}. STOP pour arreter.' }).expect(200);
       await del(a.adminToken, 'appointment.reminder_d1/sms/fr').expect(204);
 
-      const res = await put(a.adminToken, 'appointment.reminder_d1/sms/fr', { body: '{{etablissement.nom}} : rappel rdv le {{rdv.date}}.' }).expect(200);
+      const res = await put(a.adminToken, 'appointment.reminder_d1/sms/fr', { body: '{{etablissement.nom}} : rappel rdv le {{rdv.date}}. STOP pour arreter.' }).expect(200);
 
       expect(res.body.data.version).toBe(2);
     });

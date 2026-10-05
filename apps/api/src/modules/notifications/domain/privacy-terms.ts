@@ -38,7 +38,33 @@ export const FORBIDDEN_TERMS: readonly string[] = [
   'dr',
   'docteur',
   'doctor',
+  'maternité',
+  'gynéco',
+  'accouchement',
+  'planning familial',
+  'toxicomanie',
+  'arv',
+  'antirétroviral',
+  'prep',
+  'sérologie',
+  'vaccin',
+  'radiothérapie',
+  'diagnosis',
+  'hepatitis',
+  'tuberculosis',
+  'pregnancy',
+  'pregnant',
+  'disease',
+  'mental health',
+  'abortion',
+  'antiretroviral',
+  'vaccine',
+  'treatment',
+  'medication',
 ];
+
+/** Sigles ambigus en début de mot (« prep » dans « preparer ») : reconnus comme mot entier seulement. */
+const WHOLE_WORD_TERMS: ReadonlySet<string> = new Set(['prep', 'arv']);
 
 /** Termes courts : reconnus uniquement comme mot entier (« dr » ne doit pas se déclencher dans « adresse »). */
 const SHORT_TERM_MAX_LENGTH = 3;
@@ -47,6 +73,7 @@ const PLACEHOLDER = /\{\{[^}]*\}\}/g;
 /** Minuscules, sans accents, pour comparer sans tenir compte de la casse ni des accents. */
 export function normalizeForMatch(text: string): string {
   return text
+    .replace(/\p{Cf}/gu, '')
     .normalize('NFD')
     .replace(/\p{M}/gu, '')
     .toLowerCase();
@@ -61,7 +88,7 @@ function toPaddedWords(text: string): string {
 function matches(paddedWords: string, term: string): boolean {
   const normalized = normalizeForMatch(term);
   // Terme court : mot entier. Radical ou mot plus long : début de mot (« résultat » reconnaît « résultats »).
-  return normalized.length <= SHORT_TERM_MAX_LENGTH ? paddedWords.includes(` ${normalized} `) : paddedWords.includes(` ${normalized}`);
+  return normalized.length <= SHORT_TERM_MAX_LENGTH || WHOLE_WORD_TERMS.has(normalized) ? paddedWords.includes(` ${normalized} `) : paddedWords.includes(` ${normalized}`);
 }
 
 /** Termes interdits trouvés dans le texte (variables `{{…}}` ignorées), dans l'ordre de la liste. */

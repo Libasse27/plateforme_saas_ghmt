@@ -10,6 +10,7 @@ import { dedupKey } from '../domain/dedup-key';
 import { decideEarly, type DecisionInput, type EarlyOutcome } from '../domain/delivery-decision';
 import { appointmentVariables, invoiceVariables, quotaVariables, type InvoiceContext, type QuotaContext } from '../domain/message-variables';
 import { deferForQuietHours } from '../domain/quiet-hours';
+import { isSameLocalDay } from '../domain/zoned-time';
 import { SMS_MAX_SEGMENTS } from '../domain/sms-encoding';
 import { TemplateRenderError } from '../domain/template-engine';
 import { H2_TOO_LATE_MS, INAPP_LINK_SUBSCRIPTION, SMS_RETRY_WINDOW_MS } from '../notifications.constants';
@@ -24,7 +25,7 @@ import { DeliveryRecorder } from './delivery-recorder';
 import { MessageComposer, type ComposedMessage } from './message-composer';
 import { SmsQuotaService } from './sms-quota.service';
 
-type FallbackVariant = 'provider_fallback' | 'quota_fallback';
+type FallbackVariant = 'provider_fallback' | 'quota_fallback' | 'channel_fallback';
 type Outcome = EarlyOutcome | { readonly kind: 'defer'; readonly until: Date; readonly deadlineAt?: Date };
 type SuppressOutcome = { readonly kind: 'suppress'; readonly reason: SuppressionReason; readonly fallback?: FallbackVariant };
 
@@ -69,6 +70,8 @@ export class DeliveryPreparer {
     if (early) return this.finish(tx, row, early, facts, now);
     const gate = row.channel === 'sms' ? this.smsGate(row, facts, now) : null;
     if (gate) return this.finish(tx, row, gate, facts, now);
+    const sameDay = this.reminderOnAppointmentDay(row, facts, now);
+    if (sameDay) return this.finish(tx, row, sameDay, facts, now);
 
     const message = await this.render(tx, row, facts, now);
     if ('kind' in message) return this.finish(tx, row, message, facts, now);
@@ -90,7 +93,7 @@ export class DeliveryPreparer {
         : null;
     const patient = row.recipientType === 'patient' ? await this.recipients.findPatient(tx, row.tenantId, row.recipientId) : null;
     const user = row.recipientType === 'user' ? await this.recipients.findUser(tx, row.tenantId, row.recipientId) : null;
-    const consents = patient && row.category === 'clinical_reminder' ? await this.consents.latestByChannel(tx, row.tenantId, patient.id) : null;
+    const consents = patient && (row.category === 'clinical_reminder' || row.channel === 'sms') ? await this.consents.latestByChannel(tx, row.tenantId, patient.id) : null;
     const emailPreferenceEnabled = user ? await this.recipients.isEmailEnabled(tx, row.tenantId, user.id) : true;
     return {
       settings,
@@ -130,6 +133,7 @@ export class DeliveryPreparer {
       consentGranted: facts.consents?.[row.channel === 'email' ? 'email' : 'sms']?.granted === true,
       emailPreferenceEnabled: facts.emailPreferenceEnabled,
       appointmentSmsEnabled: facts.settings.appointmentSmsEnabled,
+      smsStopped: facts.consents?.sms?.source === 'sms_stop' && facts.consents.sms.granted === false,
     };
   }
 
@@ -139,6 +143,8 @@ export class DeliveryPreparer {
     const hours = { start: facts.settings.quietHoursStart, end: facts.settings.quietHoursEnd };
     const until = deferForQuietHours(now, facts.timeZone, hours, row.id);
     if (until === null) return null;
+    const lateForTomorrow = this.reminderOnAppointmentDay(row, facts, until);
+    if (lateForTomorrow) return lateForTomorrow;
     const startsAt = row.subjectVersion ? new Date(row.subjectVersion) : null;
     if (row.typeCode === 'appointment.reminder_h2' && startsAt && until.getTime() > startsAt.getTime() - H2_TOO_LATE_MS) return { kind: 'suppress', reason: 'too_late' };
     if (row.category === 'clinical_reminder') {
@@ -146,6 +152,12 @@ export class DeliveryPreparer {
     }
     // Message transactionnel de nuit : la fenêtre de retry (2 h) repart de l'heure d'envoi reportée.
     return { kind: 'defer', until, deadlineAt: new Date(until.getTime() + SMS_RETRY_WINDOW_MS) };
+  }
+
+  /** Un J-1 dit « demain » : s'il partait (après report éventuel) le jour local du rendez-vous, il serait faux (too_late). */
+  private reminderOnAppointmentDay(row: Notification, facts: Facts, sendAt: Date): SuppressOutcome | null {
+    if (row.typeCode !== 'appointment.reminder_d1' || !row.subjectVersion) return null;
+    return isSameLocalDay(sendAt, new Date(row.subjectVersion), facts.timeZone) ? { kind: 'suppress', reason: 'too_late' } : null;
   }
 
   private async render(tx: TenantTx, row: Notification, facts: Facts, now: Date): Promise<ComposedMessage | EarlyOutcome> {
@@ -198,7 +210,8 @@ export class DeliveryPreparer {
     else if (outcome.kind === 'fail') await this.recorder.fail(tx, row, { errorCode: outcome.errorCode, errorClass: outcome.errorClass ?? (outcome.errorCode === 'render_error' ? 'permanent_config' : null) }, now);
     else {
       await this.recorder.suppress(tx, row, outcome.reason, now);
-      const fallback = 'fallback' in outcome ? outcome.fallback : undefined;
+      const smsDisabled = outcome.reason === 'channel_disabled' && row.channel === 'sms';
+      const fallback = 'fallback' in outcome ? outcome.fallback : smsDisabled ? 'channel_fallback' : undefined;
       if (fallback) await this.createEmailFallback(tx, row, facts, fallback, now);
     }
     return null;

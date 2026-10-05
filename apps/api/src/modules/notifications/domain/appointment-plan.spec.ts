@@ -217,3 +217,12 @@ describe('planAppointmentNotifications', () => {
     expect(plan.every((p) => p.suppressionReason === 'recipient_inactive')).toBe(true);
   });
 });
+
+describe('STOP et SMS transactionnels (décision D10)', () => {
+  it('un STOP en vigueur écarte le SMS transactionnel : repli e-mail, sinon channel_disabled', () => {
+    const stopped = { ...FULL_CONTACT, smsStopped: true };
+
+    expect(chooseChannel('transactional', stopped, SETTINGS)).toEqual({ channel: 'email', suppressionReason: null });
+    expect(chooseChannel('transactional', { ...stopped, hasEmail: false }, SETTINGS)).toEqual({ channel: 'sms', suppressionReason: 'channel_disabled' });
+  });
+});

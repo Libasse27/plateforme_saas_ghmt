@@ -25,6 +25,8 @@ describe('mappeurs de la boîte in-app', () => {
     expect(toInAppMessage(null)).toMatchObject({ id: '', title: 'Notification', body: '', link: null, readAt: null });
     expect(toInAppMessage({ id: 'x', link: 'https://evil.test' }).link).toBeNull();
     expect(toInAppMessage({ id: 'x', link: '//evil.test' }).link).toBeNull();
+    expect(toInAppMessage({ id: 'x', link: '//evil' }).link).toBeNull();
+    expect(toInAppMessage({ id: 'x', link: '/' }).link).toBe('/');
     expect(toInAppMessage({ id: 'x', link: 'javascript:alert(1)' }).link).toBeNull();
   });
   it('isInternalLink applique le motif du contrat', () => {

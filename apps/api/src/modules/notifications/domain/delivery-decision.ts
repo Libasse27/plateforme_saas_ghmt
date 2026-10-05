@@ -19,6 +19,8 @@ export interface DecisionInput {
   /** Préférence « e-mail administratif » du destinataire personnel (absente = activée). */
   readonly emailPreferenceEnabled: boolean;
   readonly appointmentSmsEnabled: boolean;
+  /** Dernier consentement SMS = STOP : plus aucun SMS vers ce numéro, transactionnel compris. */
+  readonly smsStopped?: boolean;
 }
 
 export type EarlyOutcome =
@@ -40,7 +42,7 @@ export function decideEarly(input: DecisionInput): EarlyOutcome | null {
   if (input.deadlineAt !== null && input.now > input.deadlineAt) return { kind: 'fail', errorCode: 'deadline_exceeded', errorClass: null };
   if (input.channel !== 'inapp' && input.address === null) return suppress('no_contact');
   if (input.category === 'clinical_reminder' && !input.consentGranted) return suppress('no_consent');
-  if (input.category === 'transactional' && input.channel === 'sms' && !input.appointmentSmsEnabled) return suppress('channel_disabled');
+  if (input.category === 'transactional' && input.channel === 'sms' && (!input.appointmentSmsEnabled || input.smsStopped === true)) return suppress('channel_disabled');
   const preferenceApplies = input.channel === 'email' && input.category === 'administrative' && !input.typeCode.startsWith('subscription.');
   if (preferenceApplies && !input.emailPreferenceEnabled) return suppress('preference_disabled');
   return null;

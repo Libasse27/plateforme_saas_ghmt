@@ -90,12 +90,12 @@ describe('balayeur de rappels et rétention', () => {
       expect(await notificationsOf(app, tenant, { subjectId: id, category: 'clinical_reminder' })).toHaveLength(0);
     });
 
-    it('ignore les rendez-vous hors de l’horizon de 26 h, annulés, ou supprimés', async () => {
+    it('ignore les rendez-vous hors de l’horizon de 48 h, annulés, ou supprimés', async () => {
       const far = await bookWithLostReminders();
       const cancelled = await bookWithLostReminders();
       await cancelAppointment(app, receptionist, cancelled.id);
 
-      await sweep(new Date(far.start.getTime() - 30 * HOUR_MS));
+      await sweep(new Date(far.start.getTime() - 50 * HOUR_MS));
       await sweep(new Date(cancelled.start.getTime() - 20 * HOUR_MS));
 
       expect(await notificationsOf(app, tenant, { subjectId: far.id, category: 'clinical_reminder' })).toHaveLength(0);

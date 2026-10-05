@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { SuppressionReason } from '@ghmt/shared';
-import type { Notification } from '../../../generated/prisma/client';
+import type { Notification, Prisma } from '../../../generated/prisma/client';
 import type { TenantTx } from '../../../infrastructure/prisma/tenant-db.service';
 import type { ClassifiedError, ErrorClass } from '../domain/error-classification';
 import { INAPP_TTL_MS } from '../notifications.constants';
@@ -93,9 +93,7 @@ export class DeliveryRecorder {
 
   async recordSent(tx: TenantTx, row: Notification, result: SentResult, now: Date): Promise<void> {
     const attempts = row.attempts + 1;
-    await tx.notification.update({
-      where: this.where(row),
-      data: {
+    const applied = await this.guarded(tx, row, 'queued', {
         status: 'sent',
         sentAt: now,
         attempts,
@@ -107,8 +105,8 @@ export class DeliveryRecorder {
         errorCode: null,
         ...RELEASED,
         updatedAt: now,
-      },
     });
+    if (!applied) return;
     await this.attempt(tx, row, attempts, { outcome: 'sent', provider: result.provider, providerMessageId: result.providerMessageId }, now);
   }
 
@@ -116,9 +114,7 @@ export class DeliveryRecorder {
   async recordFailure(tx: TenantTx, row: Notification, failure: FailureResult, provider: string | null, now: Date): Promise<void> {
     const attempts = row.attempts + 1;
     const retry = failure.kind === 'retry' && failure.nextAttemptAt !== undefined;
-    await tx.notification.update({
-      where: this.where(row),
-      data: {
+    const applied = await this.guarded(tx, row, 'queued', {
         attempts,
         errorClass: failure.error.errorClass,
         errorCode: failure.error.errorCode,
@@ -126,17 +122,26 @@ export class DeliveryRecorder {
         ...RELEASED,
         updatedAt: now,
         ...(retry ? { nextAttemptAt: failure.nextAttemptAt } : { status: 'failed', failedAt: now }),
-      },
     });
+    if (!applied) return;
     await this.attempt(tx, row, attempts, { outcome: retry ? 'retry_scheduled' : 'failed', provider, error: failure.error }, now);
   }
 
   async recordDelivery(tx: TenantTx, row: Notification, outcome: 'delivered' | 'failed', error: { errorClass: ErrorClass; errorCode: string } | null, now: Date): Promise<void> {
-    await tx.notification.update({
-      where: this.where(row),
-      data: outcome === 'delivered' ? { status: 'delivered', deliveredAt: now, updatedAt: now } : { status: 'failed', failedAt: now, errorClass: error?.errorClass ?? null, errorCode: error?.errorCode ?? null, updatedAt: now },
-    });
+    const applied = await this.guarded(
+      tx,
+      row,
+      'sent',
+      outcome === 'delivered' ? { status: 'delivered', deliveredAt: now, updatedAt: now } : { status: 'failed', failedAt: now, errorClass: error?.errorClass ?? null, errorCode: error?.errorCode ?? null, updatedAt: now },
+    );
+    if (!applied) return;
     await this.attempt(tx, row, row.attempts, { outcome, provider: row.provider, providerMessageId: row.providerMessageId, error }, now);
+  }
+
+  /** Mise à jour conditionnelle au statut attendu : une ligne déjà traitée par un autre processus n'est jamais réécrite. */
+  private async guarded(tx: TenantTx, row: Notification, expectedStatus: 'queued' | 'sent', data: Prisma.NotificationUncheckedUpdateManyInput): Promise<boolean> {
+    const { count } = await tx.notification.updateMany({ where: { tenantId: row.tenantId, id: row.id, status: expectedStatus }, data });
+    return count > 0;
   }
 
   private async attempt(

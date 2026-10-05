@@ -108,3 +108,10 @@ export function formatLocalTime(instant: Date, timeZone: string): string {
 }
 
 export const MINUTE_MS = MS_PER_MINUTE;
+
+/** Deux instants tombent-ils le même jour calendaire dans ce fuseau ? */
+export function isSameLocalDay(a: Date, b: Date, timeZone: string): boolean {
+  const left = localDateOf(a, timeZone);
+  const right = localDateOf(b, timeZone);
+  return left.year === right.year && left.month === right.month && left.day === right.day;
+}

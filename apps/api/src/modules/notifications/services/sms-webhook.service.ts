@@ -70,7 +70,9 @@ export class SmsWebhookService {
   /** Message entrant : seul un STOP a un effet ; tout autre texte est ignoré (jamais journalisé). */
   async handleInbound(input: SmsInboundWebhookInput): Promise<void> {
     if (!isStopMessage(input.text)) return;
-    const revoked = await this.stop.revokeEverywhere(input.from, this.clock.now());
-    this.logger.log({ tenants: revoked }, 'STOP SMS traité');
+    const { handled, failed } = await this.stop.revokeEverywhere(input.from, this.clock.now());
+    this.logger.log({ handled, failed }, 'STOP SMS traité');
+    // 5xx : le fournisseur rejouera le webhook (traitement idempotent) ; un STOP ne doit jamais être perdu.
+    if (failed > 0) throw new DomainError('stop_processing_failed', 503, 'Service Unavailable', 'Traitement du STOP incomplet, réessayez.');
   }
 }

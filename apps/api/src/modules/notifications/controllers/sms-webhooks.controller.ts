@@ -9,13 +9,13 @@ import { readRawBody } from '../../payments/controllers/raw-body';
 import { WEBHOOK_BODY_LIMIT_BYTES, WEBHOOK_THROTTLE } from '../notifications.constants';
 import { SmsWebhookService } from '../services/sms-webhook.service';
 
-const deliveryPipe = new ZodValidationPipe(smsDeliveryWebhookSchema);
-const inboundPipe = new ZodValidationPipe(smsInboundWebhookSchema);
+export const deliveryPipe = new ZodValidationPipe(smsDeliveryWebhookSchema);
+export const inboundPipe = new ZodValidationPipe(smsInboundWebhookSchema);
 
-const bodyOf = (req: Request): unknown => (req as Request & { body?: unknown }).body;
+export const bodyOf = (req: Request): unknown => (req as Request & { body?: unknown }).body;
 
 /** Corps brut (celui de la signature), borné à 64 Ko. Contrôlé AVANT la validation du contenu : un corps trop gros est un 413, jamais un 422. */
-async function boundedRawBody(req: Request): Promise<Buffer> {
+export async function boundedRawBody(req: Request): Promise<Buffer> {
   const raw = await readRawBody(req);
   if (raw.length > WEBHOOK_BODY_LIMIT_BYTES) throw new DomainError('payload_too_large', 413, 'Payload Too Large', 'Corps de requête trop volumineux.');
   return raw;
@@ -41,6 +41,17 @@ export class SmsWebhooksController {
     this.webhooks.assertSignedHttp({ timestamp, signature }, await boundedRawBody(req));
     await this.webhooks.handleInbound(inboundPipe.transform(bodyOf(req)));
   }
+}
+
+/**
+ * Webhooks du sandbox SMS : sans signature, donc enregistrés SEULEMENT si `SMS_SANDBOX_WEBHOOKS_ENABLED=true`
+ * (voir notifications.module.ts) et, en plus, 404 si le fournisseur actif n'est pas le sandbox.
+ */
+@Controller('webhooks/sms')
+@Public()
+@Throttle(WEBHOOK_THROTTLE)
+export class SmsSandboxWebhooksController {
+  constructor(private readonly webhooks: SmsWebhookService) {}
 
   @Post('sandbox/delivery')
   @HttpCode(204)

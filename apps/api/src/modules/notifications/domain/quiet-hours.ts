@@ -40,3 +40,11 @@ export function deferForQuietHours(instant: Date, timeZone: string, hours: Quiet
   const end = quietHoursEnd(instant, timeZone, hours);
   return end === null ? null : new Date(end.getTime() + dispersionMs(id));
 }
+
+/** Une heure locale `HH:MM` tombe-t-elle dans la plage silencieuse ? (contrôle des réglages) */
+export function isLocalTimeInQuietHours(time: string, hours: QuietHours): boolean {
+  const minutes = parseHhmm(time);
+  const start = parseHhmm(hours.start);
+  const end = parseHhmm(hours.end);
+  return start < end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
+}

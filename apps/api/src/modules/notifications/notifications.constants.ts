@@ -22,7 +22,7 @@ export const STOP_ROUTING_WINDOW_MS = 180 * DAY_MS;
 export const OUTBOX_RETENTION_MS = 30 * DAY_MS;
 
 /** Balayeur de rattrapage (docs/10 §5.8). */
-export const SWEEPER_HORIZON_MS = 26 * HOUR_MS;
+export const SWEEPER_HORIZON_MS = 48 * HOUR_MS;
 export const SWEEPER_MIN_LEAD_MS = 5 * MINUTE_MS;
 
 /** Fenêtre de retry d'un SMS transactionnel (création + 2 h), repoussée quand l'envoi est reporté en fin de plage silencieuse. */

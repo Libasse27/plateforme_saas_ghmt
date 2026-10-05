@@ -178,3 +178,65 @@ describe('lintTemplate : longueurs', () => {
     expect(issues).toContainEqual(expect.objectContaining({ path: 'subject', code: 'too_long' }));
   });
 });
+
+describe('termes interdits complétés (revue santé)', () => {
+  it.each([
+    'Votre suivi à la maternité',
+    'Consultation de gynécologie',
+    'Date de votre accouchement',
+    'Rendez-vous de planning familial',
+    'Programme toxicomanie',
+    'Retrait de vos ARV',
+    'Traitement antirétroviral',
+    'Consultation PrEP',
+    'Votre sérologie',
+    'Rappel de vaccin',
+    'Séance de radiothérapie',
+    'Your diagnosis',
+    'About hepatitis',
+    'Tuberculosis follow-up',
+    'Your pregnancy visit',
+    'Chronic disease clinic',
+    'Mental health service',
+    'After the abortion',
+    'Your treatment',
+    'Your medication',
+  ])('refuse « %s »', (body) => {
+    expect(codesOf({ ...SMS, body })).toContain('forbidden_term');
+  });
+
+  it('ne déclenche pas « prep » ou « arv » à l’intérieur d’un mot, ni sur le mot générique « test »', () => {
+    expect(findForbiddenTerms('préparer votre arrivée, tarvos, test de connexion')).toEqual([]);
+  });
+
+  it('ignore les caractères de format invisibles qui masqueraient un terme (zéro-largeur)', () => {
+    expect(findForbiddenTerms('vi​h et diag‍nostic')).toEqual(expect.arrayContaining(['vih', 'diagnostic']));
+  });
+});
+
+describe('contenu des modèles patients (revue sécurité)', () => {
+  it.each(['Voir https://exemple.com', 'Voir http://x.sn', 'Voir www.exemple.com', 'Appelez le +221 77 123 45 45', 'Appelez le 771234545', 'Tel 77-123-45-45'])('refuse un lien ou un numéro : « %s »', (body) => {
+    const codes = codesOf({ ...SMS, body });
+
+    expect(codes.some((code) => code === 'link_forbidden' || code === 'phone_forbidden')).toBe(true);
+  });
+
+  it('autorise une date ou une heure, qui ne sont pas des numéros', () => {
+    expect(codesOf({ ...SMS, body: 'Le 07/10/2026 à 10:00, 15 min avant' })).toEqual([]);
+  });
+
+  it('ne s’applique pas aux messages destinés au personnel (le lien de facturation est autorisé)', () => {
+    const issues = lintTemplate({ ...SMS, typeCode: 'subscription.payment_reminder', channel: 'email', subject: 'Facture', body: '{{lien}} https://app.exemple.com' });
+
+    expect(issues.map((i) => i.code)).not.toContain('link_forbidden');
+  });
+
+  it('impose STOP dans les SMS de rappel, pas ailleurs', () => {
+    const reminder = { ...SMS, typeCode: 'appointment.reminder_d1' as const };
+
+    expect(codesOf({ ...reminder, body: 'Rappel rdv {{rdv.date}}' })).toContain('stop_required');
+    expect(codesOf({ ...reminder, body: 'Rappel rdv {{rdv.date}}. Repondez stop pour arreter.' })).not.toContain('stop_required');
+    expect(codesOf({ ...SMS, body: 'Rdv {{rdv.date}}' })).not.toContain('stop_required');
+    expect(codesOf({ ...reminder, channel: 'email', subject: 'Rappel', body: 'Rappel' })).not.toContain('stop_required');
+  });
+});

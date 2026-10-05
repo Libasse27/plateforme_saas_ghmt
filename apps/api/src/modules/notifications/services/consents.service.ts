@@ -7,6 +7,7 @@ import { DomainError } from '../../../common/errors/domain-error';
 import { Clock } from '../../../common/time/clock';
 import { TenantDb, type TenantTx } from '../../../infrastructure/prisma/tenant-db.service';
 import { isPatientWithinScope } from '../../patients/domain/patient-scope';
+import { AppointmentPlanningService } from './appointment-planning.service';
 import { toConsentsView } from '../mappers/consent.mapper';
 import { ConsentsRepository } from '../repositories/consents.repository';
 import { NotificationsRepository } from '../repositories/notifications.repository';
@@ -20,6 +21,7 @@ export class ConsentsService {
     private readonly consents: ConsentsRepository,
     private readonly notifications: NotificationsRepository,
     private readonly recipients: RecipientsRepository,
+    private readonly planning: AppointmentPlanningService,
     private readonly audit: AuditService,
     private readonly context: RequestContext,
     private readonly clock: Clock,
@@ -48,8 +50,13 @@ export class ConsentsService {
         changes: { channel: input.channel, purpose: input.purpose, granted: input.granted, source: input.source },
       });
       // Effet immédiat, dans la même transaction : un retrait supprime les rappels en attente, un octroi ré-arme les futurs.
-      if (input.granted) await this.notifications.reactivateNoConsent(tx, tenantId, patientId, input.channel, now);
-      else await this.notifications.suppressPatientReminders(tx, tenantId, patientId, input.channel, now);
+      if (input.granted) {
+        await this.planning.replanPatientReminders(tx, tenantId, patientId, now, 'reactivate_no_consent');
+        await this.notifications.suppressDuplicateChannelReminders(tx, tenantId, patientId, now);
+      } else {
+        await this.notifications.suppressPatientReminders(tx, tenantId, patientId, input.channel, now);
+        await this.planning.replanPatientReminders(tx, tenantId, patientId, now, 'skip');
+      }
       return this.view(tx, tenantId, patientId);
     });
   }

@@ -4,7 +4,7 @@ import { SAMPLE_VALUES } from './sample-values';
 import { SMS_MAX_SEGMENTS, analyzeSms } from './sms-encoding';
 import { extractVariables, findMalformedPlaceholders, renderLenient } from './template-engine';
 
-export type TemplateIssueCode = 'unknown_variable' | 'forbidden_term' | 'service_name' | 'too_many_segments' | 'too_long' | 'subject_required' | 'subject_forbidden';
+export type TemplateIssueCode = 'unknown_variable' | 'forbidden_term' | 'service_name' | 'too_many_segments' | 'too_long' | 'subject_required' | 'subject_forbidden' | 'link_forbidden' | 'phone_forbidden' | 'stop_required';
 
 export interface TemplateIssue {
   readonly path: 'subject' | 'body';
@@ -53,6 +53,25 @@ function contentIssues(field: Field, text: string, serviceNames: readonly string
   return [...terms, ...(services.length > 0 ? [services[0] as TemplateIssue] : [])];
 }
 
+const LINK_PATTERN = /https?:\/\/|\bwww\./i;
+const PHONE_PATTERN = /\+\s?\d[\d\s.-]{6,}\d|\b\d{2,3}[\s.-]\d{2,3}[\s.-]\d{2}[\s.-]\d{2}\b|\b\d{7,}\b/;
+const PLACEHOLDERS = /\{\{[^}]*\}\}/g;
+const STOP_REMINDERS: ReadonlySet<string> = new Set(['appointment.reminder_d1', 'appointment.reminder_h2']);
+
+/** Messages patients : aucun lien (hameçonnage) ni numéro de téléphone ; SMS de rappel : mention STOP obligatoire. */
+function patientContentIssues(input: LintInput): TemplateIssue[] {
+  if (NOTIFICATION_TYPES[input.typeCode].recipient !== 'patient') return [];
+  const issues: TemplateIssue[] = [];
+  for (const [field, text] of [['subject', input.subject ?? ''], ['body', input.body]] as const) {
+    const bare = text.replace(PLACEHOLDERS, ' ');
+    if (LINK_PATTERN.test(bare)) issues.push(issue(field, 'link_forbidden', 'Aucun lien n’est autorisé dans un message destiné à un patient.'));
+    if (PHONE_PATTERN.test(bare)) issues.push(issue(field, 'phone_forbidden', 'Aucun numéro de téléphone n’est autorisé dans un message destiné à un patient.'));
+  }
+  const needsStop = input.channel === 'sms' && STOP_REMINDERS.has(input.typeCode);
+  if (needsStop && !/\bstop\b/i.test(input.body.replace(PLACEHOLDERS, ' '))) issues.push(issue('body', 'stop_required', 'Un SMS de rappel doit indiquer comment se désinscrire (STOP).'));
+  return issues;
+}
+
 function lengthIssues(input: LintInput): TemplateIssue[] {
   const body = renderLenient(input.body, SAMPLE_VALUES);
   if (input.channel === 'sms') {
@@ -78,5 +97,5 @@ export function lintTemplate(input: LintInput): TemplateIssue[] {
     ['body', input.body],
   ];
   const perField = fields.flatMap(([field, text]) => [...variableIssues(field, text, allowed), ...contentIssues(field, text, input.serviceNames)]);
-  return [...subjectIssues(input.channel, input.subject), ...perField, ...lengthIssues(input)];
+  return [...subjectIssues(input.channel, input.subject), ...perField, ...patientContentIssues(input), ...lengthIssues(input)];
 }

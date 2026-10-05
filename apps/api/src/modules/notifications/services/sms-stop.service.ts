@@ -26,19 +26,21 @@ export class SmsStopService {
     private readonly audit: AuditService,
   ) {}
 
-  /** Retourne le nombre d'établissements traités avec succès. */
-  async revokeEverywhere(phone: string, now: Date): Promise<number> {
+  /** Établissements traités et en échec : le traitement est idempotent, l'appelant fait rejouer le webhook si `failed > 0`. */
+  async revokeEverywhere(phone: string, now: Date): Promise<{ handled: number; failed: number }> {
     const tenantIds = await this.registry.tenantsFor(this.hasher.hash(phone), now);
     let handled = 0;
+    let failed = 0;
     for (const tenantId of tenantIds) {
       try {
         await this.revokeInTenant(tenantId, phone, now);
         handled += 1;
       } catch (error: unknown) {
+        failed += 1;
         this.logger.error({ tenantId, errorCode: error instanceof Error ? error.name : 'unknown' }, 'Révocation STOP impossible pour un établissement');
       }
     }
-    return handled;
+    return { handled, failed };
   }
 
   private revokeInTenant(tenantId: string, phone: string, now: Date): Promise<void> {

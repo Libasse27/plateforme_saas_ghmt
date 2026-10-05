@@ -100,6 +100,8 @@ export const envSchema = z.object({
   NOTIFICATIONS_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(50),
   /** `none` : les SMS sont supprimés (provider_unavailable) avec repli e-mail ; `sandbox` interdit en production ; `http` exige URL et jeton. */
   SMS_PROVIDER: z.enum(['none', 'sandbox', 'http']).default('none'),
+  /** Routes `/webhooks/sms/sandbox/*` (non signées) : enregistrées seulement si `true` (dev/test ; jamais en production). */
+  SMS_SANDBOX_WEBHOOKS_ENABLED: booleanFlag('false'),
   SMS_SANDBOX_MAILBOX: z.email().default('sms-sandbox@ghmt.local'),
   SMS_HTTP_URL: optionalUrl,
   SMS_HTTP_TOKEN: optionalString.pipe(z.string().min(16, 'SMS_HTTP_TOKEN doit contenir au moins 16 caractères').optional()),

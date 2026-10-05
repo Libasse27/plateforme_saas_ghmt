@@ -15,6 +15,9 @@ import { RequirePermission } from '../../../common/decorators/auth.decorators';
 import type { Page } from '../../../common/pagination/page';
 import { ZodValidationPipe } from '../../../common/pipes/zod-validation.pipe';
 import { AUDIT_EXPORT_THROTTLE, AUDIT_VERIFY_THROTTLE } from '../admin.constants';
+import { CurrentPrincipal } from '../../../common/decorators/auth.decorators';
+import type { Principal } from '../../../common/context/request-context';
+import { AuditVerifyLimiter } from '../services/audit-verify-limiter';
 import { AuditChainVerificationService } from '../services/audit-chain-verification.service';
 import { AuditExportService } from '../services/audit-export.service';
 import { AuditLogsService } from '../services/audit-logs.service';
@@ -26,6 +29,7 @@ export class AuditLogsController {
     private readonly logs: AuditLogsService,
     private readonly exports: AuditExportService,
     private readonly verification: AuditChainVerificationService,
+    private readonly verifyLimiter: AuditVerifyLimiter,
   ) {}
 
   @Get()
@@ -53,7 +57,10 @@ export class AuditLogsController {
   @Get('verify')
   @Throttle(AUDIT_VERIFY_THROTTLE)
   @RequirePermission('audit:log:read')
-  verify(@Query(new ZodValidationPipe(verifyAuditChainQuerySchema)) query: VerifyAuditChainQuery): Promise<AuditChainVerificationView> {
-    return this.verification.verify(query);
+  verify(
+    @Query(new ZodValidationPipe(verifyAuditChainQuerySchema)) query: VerifyAuditChainQuery,
+    @CurrentPrincipal() principal: Principal,
+  ): Promise<AuditChainVerificationView> {
+    return this.verifyLimiter.run(principal, () => this.verification.verify(query));
   }
 }

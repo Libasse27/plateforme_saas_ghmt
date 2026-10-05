@@ -116,3 +116,25 @@ describe('dispersionMs', () => {
     expect(new Set(values).size).toBeGreaterThan(30);
   });
 });
+
+describe('isLocalTimeInQuietHours (réglages)', () => {
+  it('détecte une heure locale HH:MM dans une plage, y compris à cheval sur minuit', async () => {
+    const { isLocalTimeInQuietHours } = await import('./quiet-hours');
+
+    expect(isLocalTimeInQuietHours('22:00', NIGHT)).toBe(true);
+    expect(isLocalTimeInQuietHours('06:59', NIGHT)).toBe(true);
+    expect(isLocalTimeInQuietHours('07:00', NIGHT)).toBe(false);
+    expect(isLocalTimeInQuietHours('10:00', NIGHT)).toBe(false);
+    expect(isLocalTimeInQuietHours('12:00', DAYTIME)).toBe(true);
+    expect(isLocalTimeInQuietHours('14:00', DAYTIME)).toBe(false);
+  });
+});
+
+describe('isSameLocalDay', () => {
+  it('compare les jours calendaires dans le fuseau du site', async () => {
+    const { isSameLocalDay } = await import('./zoned-time');
+
+    expect(isSameLocalDay(new Date('2026-10-07T23:30:00Z'), new Date('2026-10-08T05:00:00Z'), 'Africa/Dakar')).toBe(false);
+    expect(isSameLocalDay(new Date('2026-10-07T23:30:00Z'), new Date('2026-10-08T05:00:00Z'), 'Africa/Lubumbashi')).toBe(true);
+  });
+});

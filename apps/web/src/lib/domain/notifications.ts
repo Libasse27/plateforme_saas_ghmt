@@ -13,7 +13,7 @@ export function isOpaqueCursor(value: string | null | undefined): value is strin
   return typeof value === 'string' && OPAQUE_CURSOR.test(value);
 }
 
-const INTERNAL_LINK = /^\/[A-Za-z0-9/_-]*$/;
+const INTERNAL_LINK = /^\/(?!\/)[A-Za-z0-9/_-]*$/;
 
 export function isInternalLink(value: unknown): value is string {
   return typeof value === 'string' && value.length <= 200 && INTERNAL_LINK.test(value);

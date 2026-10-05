@@ -126,6 +126,10 @@ describe('recordContactConsentSchema', () => {
     expect(recordContactConsentSchema.safeParse({ ...valid, source: 'sms_stop' }).success).toBe(false);
   });
 
+  it('refuse la source phone_change, réservée au changement de numéro', () => {
+    expect(recordContactConsentSchema.safeParse({ ...valid, source: 'phone_change' }).success).toBe(false);
+  });
+
   it('refuse une finalité ou un canal inconnu', () => {
     expect(recordContactConsentSchema.safeParse({ ...valid, purpose: 'marketing' }).success).toBe(false);
     expect(recordContactConsentSchema.safeParse({ ...valid, channel: 'inapp' }).success).toBe(false);

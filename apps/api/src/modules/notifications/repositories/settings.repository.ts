@@ -28,6 +28,12 @@ export class SettingsRepository {
     return tx.notificationSettings.upsert({ where: { tenantId }, create: { tenantId, ...data }, update: data });
   }
 
+  /** Langue par défaut de l'établissement (`platform.tenants.default_locale`) ; français à défaut ou si non prise en charge. */
+  async tenantLocale(tx: TenantTx): Promise<'fr' | 'en'> {
+    const rows = await tx.$queryRaw<{ locale: string | null }[]>`SELECT platform.current_tenant_locale() AS locale`;
+    return rows[0]?.locale === 'en' ? 'en' : 'fr';
+  }
+
   defaults(): EffectiveSettings {
     return DEFAULT_SETTINGS;
   }

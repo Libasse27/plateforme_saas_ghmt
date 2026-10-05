@@ -1,3 +1,4 @@
+import { findForbiddenTerms } from './privacy-terms';
 import { daysLate } from './dunning-schedule';
 import { formatLocalDate, formatLocalTime, type NotificationLocaleCode } from './zoned-time';
 
@@ -27,7 +28,9 @@ export function formatLongDate(instant: Date, timeZone: string, locale: Notifica
 }
 
 /** `etablissement.nom` = nom d'expéditeur réglé, à défaut le nom de l'établissement (docs/10 §5.9). */
-const displayName = (facts: { tenantName: string; senderDisplayName: string | null }): string => facts.senderDisplayName ?? facts.tenantName;
+/** Un nom saisi avant le contrôle (ou contourné) qui contiendrait un terme interdit n'est jamais affiché : repli sur le nom de l'établissement. */
+const safeName = (value: string | null, fallback: string): string => (value !== null && findForbiddenTerms(value).length === 0 ? value : fallback);
+const displayName = (facts: { tenantName: string; senderDisplayName: string | null }): string => safeName(facts.senderDisplayName, facts.tenantName);
 
 export interface AppointmentFacts {
   readonly tenantName: string;
@@ -42,7 +45,7 @@ export interface AppointmentFacts {
 export function appointmentVariables(facts: AppointmentFacts): Values {
   return {
     'etablissement.nom': displayName(facts),
-    'site.nom': facts.siteName,
+    'site.nom': safeName(facts.siteName, facts.tenantName),
     'patient.prenom': facts.patientFirstName,
     'rdv.date': formatLocalDate(facts.startsAt, facts.timeZone, facts.locale),
     'rdv.heure': formatLocalTime(facts.startsAt, facts.timeZone),

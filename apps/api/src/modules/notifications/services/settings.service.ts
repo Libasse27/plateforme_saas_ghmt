@@ -7,6 +7,8 @@ import { DomainError } from '../../../common/errors/domain-error';
 import { Clock } from '../../../common/time/clock';
 import { ENV, type Env } from '../../../infrastructure/config/env';
 import { TenantDb, type TenantTx } from '../../../infrastructure/prisma/tenant-db.service';
+import { findForbiddenTerms } from '../domain/privacy-terms';
+import { isLocalTimeInQuietHours } from '../domain/quiet-hours';
 import type { EffectiveSettings } from '../mappers/settings.mapper';
 import { SettingsRepository } from '../repositories/settings.repository';
 import { SmsQuotaService } from './sms-quota.service';
@@ -37,6 +39,12 @@ export class SettingsService {
       const merged = { ...(await this.repo.load(tx, tenantId)), ...changes };
       if (merged.quietHoursStart === merged.quietHoursEnd) {
         throw DomainError.unprocessable('invalid_quiet_hours', 'Le début et la fin de la plage silencieuse doivent différer.');
+      }
+      if (isLocalTimeInQuietHours(merged.reminderD1LocalTime, { start: merged.quietHoursStart, end: merged.quietHoursEnd })) {
+        throw DomainError.unprocessable('invalid_reminder_time', 'L’heure du rappel J-1 ne peut pas tomber dans la plage silencieuse.');
+      }
+      if (typeof merged.senderDisplayName === 'string' && findForbiddenTerms(merged.senderDisplayName).length > 0) {
+        throw DomainError.validation([{ path: 'senderDisplayName', code: 'forbidden_term', message: 'Ce nom contient un terme interdit (confidentialité).' }]);
       }
       await this.repo.save(tx, tenantId, input, userId);
       await this.audit.record(tx, tenantId, { action: 'notification.settings_updated', resourceType: 'notification_settings', resourceId: tenantId, changes });

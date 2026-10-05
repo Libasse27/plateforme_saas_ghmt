@@ -105,3 +105,11 @@ describe('loadEnv : calendrier des relances SaaS', () => {
     expect(() => loadEnv({ ...BASE, SAAS_DUNNING_OFFSETS_DAYS: value })).toThrow(/SAAS_DUNNING_OFFSETS_DAYS/);
   });
 });
+
+describe('loadEnv : webhooks du sandbox SMS', () => {
+  it('sont désactivés par défaut et s’activent explicitement', () => {
+    expect(loadEnv(BASE).SMS_SANDBOX_WEBHOOKS_ENABLED).toBe(false);
+    expect(loadEnv({ ...BASE, SMS_SANDBOX_WEBHOOKS_ENABLED: 'true' }).SMS_SANDBOX_WEBHOOKS_ENABLED).toBe(true);
+    expect(() => loadEnv({ ...BASE, SMS_SANDBOX_WEBHOOKS_ENABLED: 'oui' })).toThrow(/SMS_SANDBOX_WEBHOOKS_ENABLED/);
+  });
+});

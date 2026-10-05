@@ -73,3 +73,29 @@ describe('quotaVariables', () => {
     expect(values).toEqual({ 'etablissement.nom': 'Clinique Awa', 'quota.pourcentage': '80', 'quota.limite': '200', lien: 'https://app.example.com/abonnement' });
   });
 });
+
+describe('noms affichés : repli quand un terme interdit s’y glisse', () => {
+  const facts = {
+    tenantName: 'Clinique Awa',
+    senderDisplayName: 'Service VIH',
+    siteName: 'Maternité Nord',
+    patientFirstName: 'Fatou',
+    startsAt: new Date('2026-10-07T14:30:00Z'),
+    timeZone: 'Africa/Dakar',
+    locale: 'fr' as const,
+  };
+
+  it('retombe sur le nom de l’établissement (expéditeur) et sur celui-ci pour le site', () => {
+    const values = appointmentVariables(facts);
+
+    expect(values['etablissement.nom']).toBe('Clinique Awa');
+    expect(values['site.nom']).toBe('Clinique Awa');
+  });
+
+  it('conserve les noms qui passent le contrôle', () => {
+    const values = appointmentVariables({ ...facts, senderDisplayName: 'Clinique A.', siteName: 'Site Nord' });
+
+    expect(values['etablissement.nom']).toBe('Clinique A.');
+    expect(values['site.nom']).toBe('Site Nord');
+  });
+});

@@ -89,3 +89,16 @@ describe('modèles de rôles corrigés (A11)', () => {
     expect(director.filter((p) => p.startsWith('appointments:') && p.endsWith(':read'))).toEqual([]);
   });
 });
+
+describe('grille tarifaire (phase facturation)', () => {
+  it('donne la lecture de la grille à l’accueil et à la caisse, et sa gestion au comptable', () => {
+    for (const code of ['receptionist', 'admin_agent', 'cashier']) {
+      const perms = permissionsForTemplate(findRoleTemplate(code)!);
+      expect(perms, code).toContain('billing:price_list:read');
+      expect(perms, code).not.toContain('billing:price_list:update');
+    }
+    expect(permissionsForTemplate(findRoleTemplate('accountant')!)).toEqual(
+      expect.arrayContaining(['billing:price_list:read', 'billing:price_list:update']),
+    );
+  });
+});

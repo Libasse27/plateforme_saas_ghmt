@@ -2,7 +2,9 @@
   "name": "ghmt",
   "private": true,
   "packageManager": "pnpm@12.9.1",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
@@ -12,5 +14,7 @@
     "infra:up": "docker compose -f infra/docker-compose.yml up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml down"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "turbo": "^2.11.7"
+  }
 }

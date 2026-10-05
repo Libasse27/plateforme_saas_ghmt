@@ -105,3 +105,97 @@ describe('proxy', () => {
     expect(headers['user-agent']).toBe('UA-test');
   });
 });
+
+describe('proxy : espace plateforme séparé', () => {
+  it('redirige /plateforme/* vers /plateforme/connexion sans session plateforme', async () => {
+    const res = await proxy(req('/plateforme/factures?status=open'));
+    expect(res.status).toBe(307);
+    const location = new URL(res.headers.get('location') ?? '');
+    expect(location.pathname).toBe('/plateforme/connexion');
+    expect(location.searchParams.get('next')).toBe('/plateforme/factures?status=open');
+  });
+
+  it('ne met pas next pour la racine de la console plateforme', async () => {
+    const location = new URL((await proxy(req('/plateforme'))).headers.get('location') ?? '');
+    expect(location.pathname).toBe('/plateforme/connexion');
+    expect(location.searchParams.has('next')).toBe(false);
+  });
+
+  it('une session établissement ne donne jamais accès à /plateforme/*', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    for (const cookie of ['ghmt_at=tenant-access', 'ghmt_rt=tenant-refresh', 'ghmt_at=a; ghmt_rt=r', '__Host-ghmt_at=a']) {
+      const res = await proxy(req('/plateforme/etablissements', cookie));
+      expect(new URL(res.headers.get('location') ?? '').pathname).toBe('/plateforme/connexion');
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('une session plateforme ne donne pas accès à la console établissement', async () => {
+    const res = await proxy(req('/patients', 'ghmt_pat=platform-access; ghmt_prt=p.refresh'));
+    expect(new URL(res.headers.get('location') ?? '').pathname).toBe('/connexion');
+  });
+
+  it('laisse passer /plateforme/* avec un jeton d\'accès plateforme', async () => {
+    const res = await proxy(req('/plateforme/plans', 'ghmt_pat=pa'));
+    expect(res.headers.get('location')).toBeNull();
+    expect(res.headers.get('x-middleware-next')).toBe('1');
+  });
+
+  it('laisse passer les pages publiques de la console plateforme', async () => {
+    for (const path of ['/plateforme/connexion', '/plateforme/connexion/mfa', '/plateforme/session/expire']) {
+      expect((await proxy(req(path))).headers.get('location')).toBeNull();
+    }
+  });
+
+  it('renvoie un administrateur connecté de /plateforme/connexion vers son tableau de bord (GET seulement)', async () => {
+    const res = await proxy(req('/plateforme/connexion', 'ghmt_pat=pa'));
+    expect(new URL(res.headers.get('location') ?? '').pathname).toBe('/plateforme');
+    expect((await proxy(req('/plateforme/connexion', 'ghmt_pat=pa', 'POST'))).headers.get('location')).toBeNull();
+    expect((await proxy(req('/plateforme/connexion/mfa', 'ghmt_pat=pa'))).headers.get('location')).toBeNull();
+  });
+
+  it('rafraîchit via /platform/auth/refresh et pose les cookies plateforme (pas ceux de l\'établissement)', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => okEnvelope({ accessToken: 'new-pa', refreshToken: 'p.new', expiresIn: 600 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await proxy(req('/plateforme', 'ghmt_prt=p.old-refresh-token-1'));
+    expect(res.headers.get('location')).toBeNull();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('http://api.test/api/v1/platform/auth/refresh');
+    const setCookie = res.headers.getSetCookie().join('\n');
+    expect(setCookie).toContain('ghmt_pat=new-pa');
+    expect(setCookie).toContain('ghmt_prt=p.new');
+    expect(setCookie).not.toContain('ghmt_at=');
+    expect(setCookie).toMatch(/HttpOnly/i);
+  });
+
+  it('purge uniquement la session plateforme quand le refresh est refusé', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => problem(401, 'unauthenticated')));
+    const res = await proxy(req('/plateforme', 'ghmt_prt=p.revoked-token-12345; ghmt_rt=tenant'));
+    const location = new URL(res.headers.get('location') ?? '');
+    expect(location.pathname).toBe('/plateforme/connexion');
+    expect(location.searchParams.get('session')).toBe('expiree');
+    const setCookie = res.headers.getSetCookie().join('\n');
+    expect(setCookie).toContain('ghmt_prt=;');
+    expect(setCookie).not.toContain('ghmt_rt=;');
+  });
+
+  it('conserve la session plateforme lors d\'une panne réseau du refresh', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('down');
+    }));
+    const res = await proxy(req('/plateforme', 'ghmt_prt=p.still-valid-token-1'));
+    expect(res.status).toBe(307);
+    expect(res.headers.getSetCookie()).toEqual([]);
+  });
+
+  it('utilise les cookies __Host- plateforme en mode sécurisé', async () => {
+    vi.stubEnv('SESSION_COOKIE_SECURE', 'true');
+    expect((await proxy(req('/plateforme', '__Host-ghmt_pat=a'))).headers.get('location')).toBeNull();
+    expect((await proxy(req('/plateforme', 'ghmt_pat=a'))).status).toBe(307);
+  });
+
+  it('la page sandbox de paiement est publique (hors production, le 404 est rendu par la page)', async () => {
+    expect((await proxy(req('/sandbox/paiement/ref-12345678'))).headers.get('location')).toBeNull();
+  });
+});
+

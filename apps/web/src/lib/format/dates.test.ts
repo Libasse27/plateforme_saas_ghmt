@@ -64,3 +64,23 @@ describe('buildSlot', () => {
     expect(parseTime('7:5')).toBeNull();
   });
 });
+
+describe('formatDay / formatDateTime / daysUntil', () => {
+  it('formate dans le fuseau de l\'établissement', async () => {
+    const { formatDay, formatDateTime } = await import('./dates');
+    expect(formatDay('2026-11-03T23:30:00.000Z', 'Africa/Dakar')).toBe('03/11/2026');
+    expect(formatDay('2026-11-03T23:30:00.000Z', 'Africa/Douala')).toBe('04/11/2026');
+    expect(formatDateTime('2026-11-03T13:05:00.000Z', 'Africa/Dakar')).toBe('03/11/2026 13:05');
+    expect(formatDay(null, 'Africa/Dakar')).toBe('-');
+    expect(formatDateTime('pas une date', 'Africa/Dakar')).toBe('-');
+  });
+  it('compte les jours restants', async () => {
+    const { daysUntil } = await import('./dates');
+    const now = new Date('2026-10-04T10:00:00.000Z');
+    expect(daysUntil('2026-10-14T09:00:00.000Z', now)).toBe(10);
+    expect(daysUntil('2026-10-14T11:00:00.000Z', now)).toBe(11);
+    expect(daysUntil('2026-10-01T00:00:00.000Z', now)).toBe(0);
+    expect(daysUntil(null, now)).toBeNull();
+    expect(daysUntil('x', now)).toBeNull();
+  });
+});

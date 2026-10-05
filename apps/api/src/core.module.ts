@@ -11,6 +11,9 @@ import { SmtpMailer } from './common/mail/smtp-mailer';
 import { Clock } from './common/time/clock';
 import { FieldCrypto } from './common/crypto/field-crypto.service';
 import { ENV, loadEnv, type Env } from './infrastructure/config/env';
+import { DomainEventBus } from './common/events/domain-event-bus';
+import { PlatformDb } from './infrastructure/prisma/platform-db.service';
+import { PlatformPrismaService } from './infrastructure/prisma/platform-prisma.service';
 import { PrismaService } from './infrastructure/prisma/prisma.service';
 import { TenantDb } from './infrastructure/prisma/tenant-db.service';
 import { TenantProvisioningService } from './infrastructure/tenancy/tenant-provisioning.service';
@@ -19,6 +22,9 @@ const CORE_PROVIDERS = [
   RequestContext,
   PrismaService,
   TenantDb,
+  PlatformPrismaService,
+  PlatformDb,
+  DomainEventBus,
   FieldCrypto,
   AuditService,
   AuthorizationService,

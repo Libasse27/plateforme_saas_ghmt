@@ -13,6 +13,8 @@ export interface ClientDeps {
   readonly fetchImpl?: typeof fetch;
   /** C9 : IP et User-Agent du client final, transmis à l'API. */
   readonly clientInfo?: ClientInfo | undefined;
+  /** Chemin de rafraîchissement du realm (défaut : établissement). */
+  readonly refreshPath?: string | undefined;
 }
 
 export interface RequestOptions {

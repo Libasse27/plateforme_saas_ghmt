@@ -3,6 +3,7 @@ import type { INestApplication } from '@nestjs/common';
 import type { ScopeType, SignupTenantInput } from '@ghmt/shared';
 import { AccessTokenService } from '../../src/common/auth/access-token.service';
 import { PasswordService } from '../../src/common/auth/password.service';
+import { PlatformDb } from '../../src/infrastructure/prisma/platform-db.service';
 import { TenantDb } from '../../src/infrastructure/prisma/tenant-db.service';
 import { TenantProvisioningService } from '../../src/infrastructure/tenancy/tenant-provisioning.service';
 
@@ -59,15 +60,34 @@ export async function issueToken(app: INestApplication, tenantId: string, userId
   return app.get(AccessTokenService).sign({ tenantId, userId, sessionId: session.id, mfa });
 }
 
-/** Établissement complet (tenant, site principal, 13 rôles système, administrateur). */
+/** Plan attribué par défaut aux établissements de test : sans limite d'utilisateurs ni de sites (les autres suites ne testent pas les quotas). */
+export const FIXTURE_DEFAULT_PLAN = 'enterprise';
+
+/**
+ * Remplace le plan de l'abonnement d'un établissement (statut inchangé), sans facturation ni synchronisation des modules.
+ * `trial` conserve le plan d'essai attribué à l'inscription.
+ */
+export async function setFixturePlan(app: INestApplication, tenantId: string, planCode: string): Promise<void> {
+  if (planCode === 'trial') return;
+  await app.get(PlatformDb).run(async (tx) => {
+    const plan = await tx.plan.findFirstOrThrow({ where: { code: planCode, archivedAt: null }, orderBy: { version: 'desc' } });
+    await tx.subscription.update({ where: { tenantId }, data: { planId: plan.id } });
+  });
+}
+
+/**
+ * Établissement complet (tenant, site principal, 13 rôles système, administrateur).
+ * `subscriptionPlan` : code du plan attribué (défaut `enterprise`, illimité) ou `trial` pour garder le plan d'essai.
+ */
 export async function createTenantFixture(
   app: INestApplication,
-  options: { optionalModules?: readonly string[]; prefix?: string } = {},
+  options: { optionalModules?: readonly string[]; prefix?: string; subscriptionPlan?: string } = {},
 ): Promise<TenantFixture> {
   const slug = uniqueSlug(options.prefix ?? 'test');
   const input = signupInput(slug);
   const hash = await app.get(PasswordService).hash(FIXTURE_PASSWORD);
   const provisioned = await app.get(TenantProvisioningService).provision(input, hash, options.optionalModules);
+  await setFixturePlan(app, provisioned.tenantId, options.subscriptionPlan ?? FIXTURE_DEFAULT_PLAN);
   const adminToken = await issueToken(app, provisioned.tenantId, provisioned.adminUserId);
   return { ...provisioned, slug, adminEmail: input.admin.email, adminToken };
 }

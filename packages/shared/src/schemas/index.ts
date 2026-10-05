@@ -193,3 +193,7 @@ export * from './org';
 export * from './iam';
 export * from './patients';
 export * from './appointments';
+export * from './platform';
+export * from './subscriptions';
+export * from './billing';
+export * from './payments';

@@ -1,5 +1,5 @@
 import { isApiError } from '@/lib/api/errors';
-import { describeApiError, fieldErrorsFromApi } from '@/lib/api/messages';
+import { describeApiError, fieldErrorsFromApi, type DescribeOptions } from '@/lib/api/messages';
 import type { FormState } from '@/lib/forms';
 import { toDuplicateCandidates } from '@/lib/domain/mappers';
 
@@ -7,13 +7,13 @@ import { toDuplicateCandidates } from '@/lib/domain/mappers';
  * Convertit une erreur d'API en état de formulaire français. Les erreurs inattendues
  * (bogues) sont relancées vers la limite d'erreur plutôt qu'avalées.
  */
-export function failureState(error: unknown, values?: Readonly<Record<string, string>>): FormState {
+export function failureState(error: unknown, values?: Readonly<Record<string, string>>, options?: DescribeOptions): FormState {
   if (!isApiError(error)) throw error;
   const candidates = error.code === 'patient_duplicate' ? toDuplicateCandidates(error.extras) : [];
   const forceable = error.code === 'patient_duplicate' || error.code === 'patient_duplicate_out_of_scope';
   return {
     ok: false,
-    message: describeApiError(error),
+    message: describeApiError(error, options),
     fieldErrors: fieldErrorsFromApi(error.errors),
     values,
     extra: forceable ? { candidates, forceable: true } : undefined,

@@ -486,3 +486,13 @@ Le lot 1 (corrigé immédiatement) est décrit dans `08-correctifs-revues.md`. L
 | Front | CSP stricte à nonces + `frame-ancestors` | Re-revue sécurité M5 |
 | Identitovigilance | Politique produit sur l'oracle d'existence d'un doublon hors périmètre (409 sans détail, forçable et audité au MVP) ; rapprochement confié au rôle Identitovigilance | Re-revues sécurité N6 / santé N2 |
 | Pays | Validation métier de la règle du zéro de tête pour le Gabon (GA) dans la normalisation téléphonique | Re-revue santé N7 |
+
+### Compléments issus des revues de la phase facturation / SaaS (2026-10-05)
+| Domaine | Évolution | Origine |
+|---|---|---|
+| Facturation patient | Avoirs et remboursements (dont trop-perçu `overpaid`) avec permission dédiée et validation par un tiers ; remises et exonérations / indigence motivées et validées ; tiers payant et garant distinct du patient ; responsable payeur des mineurs et personnes à charge | Revue santé |
+| Conformité fiscale | Mentions légales (NIF, RCCM, adresse, régime de TVA des actes médicaux, montant en lettres) ; factures normalisées par pays (e-MECeF Bénin, FNE Côte d'Ivoire…) ; conservation OHADA de 10 ans des pièces comptables et de l'audit de caisse, exclue de la purge post-`expired` (archivage WORM) | Revue santé |
+| Caisse | Rapport Z PDF, reçu thermique 80 mm, comptage par mode de paiement | Revue santé (US-143/144) |
+| Plateforme | Console plateforme sur sous-domaine distinct + CSP stricte (isolation vis-à-vis d'une XSS de l'espace établissement) ; rôle PostgreSQL d'amorçage dédié au script d'administration | Revue sécurité L2/L3 |
+| Droits du plan | Application des fonctionnalités `customRoles`, `export`, `api` et des limites `activePatients`, `smsMonthly`, `storageGb` | Revue sécurité L4 |
+| Plateforme (agrégats) | Afficher « < 5 » pour les comptes très faibles du tableau de bord | Revue santé |

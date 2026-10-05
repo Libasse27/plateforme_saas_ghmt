@@ -4,8 +4,9 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { isActivePath } from '@/lib/auth/active-path';
 
-export function NavLink({ href, label }: { readonly href: string; readonly label: string }) {
-  const active = isActivePath(href, usePathname());
+export function NavLink({ href, label, exact = false }: { readonly href: string; readonly label: string; readonly exact?: boolean }) {
+  const pathname = usePathname();
+  const active = exact ? pathname === href : isActivePath(href, pathname);
   return (
     <Link
       href={href}

@@ -99,3 +99,9 @@ export function safeNextPath(candidate: string | null | undefined): string {
   if (/[\u0000-\u001f]/.test(candidate)) return '/';
   return candidate;
 }
+
+/** Chemin interne de la console plateforme uniquement (anti redirection ouverte) ; sinon le tableau de bord plateforme. */
+export function safePlatformPath(candidate: string | null | undefined): string {
+  const path = safeNextPath(candidate);
+  return path === '/plateforme' || path.startsWith('/plateforme/') || path.startsWith('/plateforme?') ? path : '/plateforme';
+}

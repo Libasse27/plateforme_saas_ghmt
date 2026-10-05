@@ -3,16 +3,23 @@
 import Link from 'next/link';
 import { useActionState } from 'react';
 import { activateTotpAction, startTotpSetupAction } from '@/actions/mfa-setup';
-import { EMPTY_FORM_STATE } from '@/lib/forms';
+import { EMPTY_FORM_STATE, type FormState } from '@/lib/forms';
 import { Alert } from '@/components/ui/Alert';
 import { TextField } from '@/components/ui/Field';
 import { FormMessage } from '@/components/ui/FormMessage';
 import { SubmitButton } from '@/components/ui/SubmitButton';
 import { buttonClass } from '@/components/ui/styles';
 
-export function TotpEnrolment() {
-  const [setup, startAction] = useActionState(async () => startTotpSetupAction(), EMPTY_FORM_STATE);
-  const [activation, activateAction] = useActionState(activateTotpAction, EMPTY_FORM_STATE);
+export interface TotpEnrolmentProps {
+  /** Actions du realm (défaut : établissement ; la console plateforme fournit les siennes). */
+  readonly startSetup?: () => Promise<FormState>;
+  readonly activate?: (prev: FormState, formData: FormData) => Promise<FormState>;
+  readonly continueHref?: string;
+}
+
+export function TotpEnrolment({ startSetup = startTotpSetupAction, activate = activateTotpAction, continueHref = '/' }: TotpEnrolmentProps = {}) {
+  const [setup, startAction] = useActionState(async () => startSetup(), EMPTY_FORM_STATE);
+  const [activation, activateAction] = useActionState(activate, EMPTY_FORM_STATE);
 
   const backupCodes = (activation.extra?.backupCodes ?? []) as readonly string[];
   if (activation.ok) {
@@ -27,7 +34,7 @@ export function TotpEnrolment() {
             <li key={code}>{code}</li>
           ))}
         </ul>
-        <Link href="/" className={buttonClass.primary}>J&apos;ai conservé mes codes, continuer</Link>
+        <Link href={continueHref} className={buttonClass.primary}>J&apos;ai conservé mes codes, continuer</Link>
       </div>
     );
   }

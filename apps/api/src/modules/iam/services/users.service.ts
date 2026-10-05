@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { CreateUserInput, ListUsersQuery, UpdateUserInput } from '@ghmt/shared';
 import { AuditService } from '../../../common/audit/audit.service';
+import { EntitlementService } from '../../../common/authz/entitlement.service';
 import { RequestContext } from '../../../common/context/request-context';
 import { DomainError } from '../../../common/errors/domain-error';
 import { Page, decodeUuidCursor } from '../../../common/pagination/page';
@@ -24,6 +25,7 @@ export class UsersService {
     private readonly context: RequestContext,
     private readonly assignments: AssignmentsService,
     private readonly invitations: InvitationsService,
+    private readonly entitlements: EntitlementService,
   ) {}
 
   async list(query: ListUsersQuery): Promise<Page<ReturnType<typeof toUserDto>>> {
@@ -62,6 +64,8 @@ export class UsersService {
     const created = await this.tenantDb.run(async (tx) => {
       const existing = await tx.user.findFirst({ where: { email: input.email }, select: { id: true } });
       if (existing) throw DomainError.conflict('email_already_used', 'Cette adresse e-mail est déjà utilisée.');
+      // Limite dure du plan : utilisateurs actifs + invités (403 plan_limit_reached).
+      await this.entitlements.assertCanAddUser(tx);
 
       // Compte « invité » sans identifiants : le mot de passe est choisi par l'intéressé via le lien reçu par e-mail.
       const user = await tx.user.create({
@@ -181,6 +185,8 @@ export class UsersService {
       if (before.status === 'invited') {
         throw DomainError.conflict('invalid_state', 'Un utilisateur invité doit d’abord accepter son invitation.');
       }
+      // Un compte désactivé n'est pas compté dans le plan : le réactiver consomme une place.
+      if (before.status === 'disabled') await this.entitlements.assertCanAddUser(tx);
       // Sans identifiants (invitation jamais acceptée), le compte ne peut pas être « actif » : retour à « invité »
       // pour que l'invitation puisse être renvoyée.
       const hasCredential = (await tx.userCredential.count({ where: { userId: id } })) > 0;

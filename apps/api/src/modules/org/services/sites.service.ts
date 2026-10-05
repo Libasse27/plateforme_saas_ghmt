@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { AuditService } from '../../../common/audit/audit.service';
+import { EntitlementService } from '../../../common/authz/entitlement.service';
 import { scopesFor } from '../../../common/authz/authorization.service';
 import { RequestContext } from '../../../common/context/request-context';
 import { DomainError } from '../../../common/errors/domain-error';
@@ -16,6 +17,7 @@ export class SitesService {
     private readonly tenantDb: TenantDb,
     private readonly audit: AuditService,
     private readonly context: RequestContext,
+    private readonly entitlements: EntitlementService,
   ) {}
 
   async list() {
@@ -43,6 +45,8 @@ export class SitesService {
     }
     return this.tenantDb.run(async (tx) => {
       await this.assertCodeFree(tx, input.code);
+      // Limite dure du plan : nombre de sites (403 plan_limit_reached).
+      await this.entitlements.assertCanAddSite(tx);
       const site = await tx.site.create({
         data: { ...input, tenantId: principal.tenantId, createdBy: principal.userId },
         select: SITE_SELECT,

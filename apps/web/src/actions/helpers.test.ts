@@ -23,3 +23,12 @@ describe('failureState', () => {
     expect(() => failureState(new Error('bug'))).toThrow('bug');
   });
 });
+
+describe('failureState avec détails', () => {
+  it('cite le reste dû dans la devise fournie', () => {
+    const state = failureState(apiError('amount_exceeds_balance', { details: { balance: '500.00' } }), { amount: '900' }, { currency: 'XOF' });
+    expect(state.message).toContain('reste dû');
+    expect(state.message).toContain('500');
+    expect(state.values).toEqual({ amount: '900' });
+  });
+});

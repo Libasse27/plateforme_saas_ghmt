@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { AccessTokenService } from '../auth/access-token.service';
 import { RequestContext, type Principal } from '../context/request-context';
 import { IS_PUBLIC_KEY } from '../decorators/auth.decorators';
+import { PLATFORM_REALM_KEY } from '../decorators/realm.decorators';
 import { DomainError } from '../errors/domain-error';
 import { TenantDb } from '../../infrastructure/prisma/tenant-db.service';
 
@@ -28,7 +29,10 @@ export class JwtAuthGuard implements CanActivate {
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
-    if (this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [ctx.getHandler(), ctx.getClass()])) return true;
+    const targets = [ctx.getHandler(), ctx.getClass()];
+    if (this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, targets)) return true;
+    // Realm plateforme : contournement EXPLICITE des guards tenant ; le guard plateforme authentifie ces routes.
+    if (this.reflector.getAllAndOverride<boolean>(PLATFORM_REALM_KEY, targets)) return true;
 
     const req = ctx.switchToHttp().getRequest<Request & { principal?: Principal }>();
     const token = extractBearerToken(req);

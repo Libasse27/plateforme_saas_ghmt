@@ -1,11 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import { ROLE_TEMPLATES, permissionsForTemplate, type SignupTenantInput } from '@ghmt/shared';
+import { ROLE_TEMPLATES, TRIAL_DAYS, permissionsForTemplate, trialPlanCodeFor, type SignupTenantInput } from '@ghmt/shared';
 import { AuditService } from '../../common/audit/audit.service';
+import { Clock } from '../../common/time/clock';
 import { TenantDb, applyTenantContext, type TenantTx } from '../prisma/tenant-db.service';
 
 export const TENANT_ADMIN_ROLE = 'tenant_admin';
-/** Modules optionnels activés par défaut à l'inscription (les modules « core » le sont toujours). */
-export const DEFAULT_OPTIONAL_MODULES: readonly string[] = ['appointments'];
+/**
+ * Modules optionnels activés par défaut à l'inscription (les modules « core » le sont toujours).
+ * Tous les plans incluent la facturation et la caisse (docs/09 §A2).
+ */
+export const DEFAULT_OPTIONAL_MODULES: readonly string[] = ['appointments', 'billing', 'cashier'];
 
 export interface ProvisionedTenant {
   readonly tenantId: string;
@@ -15,14 +19,15 @@ export interface ProvisionedTenant {
 
 /**
  * Création atomique d'un établissement (docs/05 A11) : tenant + modules (fonction SECURITY DEFINER),
- * site principal, rôles système clonés depuis les modèles, administrateur et son affectation.
- * Tout ou rien : une seule transaction.
+ * site principal, rôles système clonés depuis les modèles, administrateur et son affectation,
+ * essai de 30 jours (docs/09 §A3). Tout ou rien : une seule transaction.
  */
 @Injectable()
 export class TenantProvisioningService {
   constructor(
     private readonly tenantDb: TenantDb,
     private readonly audit: AuditService,
+    private readonly clock: Clock,
   ) {}
 
   provision(
@@ -41,6 +46,8 @@ export class TenantProvisioningService {
         )::text AS id`;
       const tenantId = registered!.id;
       await applyTenantContext(tx, tenantId);
+      const trialPlan = trialPlanCodeFor(e.establishmentType);
+      await tx.$queryRaw`SELECT platform.start_trial(${trialPlan}, ${TRIAL_DAYS}::int, ${this.clock.now()}::timestamptz)`;
 
       const site = await tx.site.create({
         data: { tenantId, code: input.mainSite.code, name: input.mainSite.name, city: input.mainSite.city, isMain: true },
@@ -68,7 +75,7 @@ export class TenantProvisioningService {
         actorUserId: admin.id,
         resourceType: 'tenant',
         resourceId: tenantId,
-        changes: { slug: e.slug, establishmentType: e.establishmentType, modules: [...optionalModules] },
+        changes: { slug: e.slug, establishmentType: e.establishmentType, modules: [...optionalModules], trialPlan },
       });
       return { tenantId, adminUserId: admin.id, mainSiteId: site.id };
     });

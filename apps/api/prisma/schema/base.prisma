@@ -1,0 +1,15 @@
+// Schéma Prisma du MVP GHMT — voir docs/02-modele-donnees.md §7.
+// RLS, fonctions SQL, contraintes EXCLUDE et index spécifiques : migrations SQL (prisma/migrations).
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../../src/generated/prisma"
+  moduleFormat = "cjs"
+  importFileExtension = ""
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["platform", "tenant"]
+}
+

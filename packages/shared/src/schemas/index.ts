@@ -3,7 +3,7 @@
  */
 import { z } from 'zod';
 import { PASSWORD_MAX_LENGTH, PRIVILEGED_PASSWORD_MIN_LENGTH } from './password';
-import { email, isoDateTime, uuid } from './primitives';
+import { email, isoDateTime, tenantSlug, uuid } from './primitives';
 
 export const ESTABLISHMENT_TYPES = [
   'hospital_n1',
@@ -25,11 +25,7 @@ export const CURRENCIES = ['XOF', 'XAF', 'CDF', 'USD', 'EUR'] as const;
 
 export { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, PRIVILEGED_PASSWORD_MIN_LENGTH } from './password';
 
-const slug = z
-  .string()
-  .min(3)
-  .max(48)
-  .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, 'slug: minuscules, chiffres et tirets');
+const slug = tenantSlug;
 
 // ───────── Onboarding / tenancy ─────────
 export const signupTenantSchema = z.object({
@@ -199,3 +195,5 @@ export * from './billing';
 export * from './payments';
 export * from './notifications';
 export * from './admin';
+export * from './security';
+export * from './onboarding';

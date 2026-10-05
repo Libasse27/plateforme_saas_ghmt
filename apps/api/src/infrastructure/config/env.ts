@@ -110,6 +110,13 @@ export const envSchema = z.object({
   SMS_HTTP_WEBHOOK_SECRET: optionalString.pipe(z.string().min(32, 'SMS_HTTP_WEBHOOK_SECRET doit contenir au moins 32 caractères').optional()),
   SMS_HTTP_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(10_000),
   SAAS_DUNNING_OFFSETS_DAYS: dunningOffsets,
+  /** Redis (limitation de débit multi-instance, docs/11 D2) : `redis://` ou `rediss://`. */
+  REDIS_URL: optionalString.pipe(z.string().regex(/^rediss?:\/\/.+/, 'REDIS_URL : URL redis:// ou rediss:// attendue').optional()),
+  /** Stockage du limiteur : `redis` exige REDIS_URL et est obligatoire en production. */
+  RATE_LIMIT_STORE: z.enum(['memory', 'redis']).default('memory'),
+  RATE_LIMIT_KEY_PREFIX: z.string().regex(/^[a-z0-9:_-]{1,32}$/, 'RATE_LIMIT_KEY_PREFIX : 1 à 32 caractères [a-z0-9:_-]').default('ghmt:rl:'),
+  /** Jobs de sécurité (purge des jetons, expiration des inscriptions) : `false` en test (pilotés par runOnce). */
+  SECURITY_JOBS_ENABLED: booleanFlag('true'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 });
 
@@ -138,6 +145,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   }
   const production = source['NODE_ENV'] === 'production';
   assertSmsConfiguration(result.data, production);
+  assertRateLimitConfiguration(result.data, production);
   const configured = result.data.JWT_PLATFORM_SECRET;
   if (production && !configured) throw new Error('Configuration invalide : JWT_PLATFORM_SECRET doit être défini en production.');
   if (production && configured === result.data.JWT_ACCESS_SECRET) {
@@ -165,5 +173,15 @@ function assertSmsConfiguration(env: Pick<ParsedEnv, 'SMS_PROVIDER' | 'SMS_HTTP_
   }
   if (production && env.SMS_HTTP_URL && !env.SMS_HTTP_URL.startsWith('https://')) {
     throw new Error('Configuration invalide : SMS_HTTP_URL doit utiliser https en production.');
+  }
+}
+
+/** Limitation de débit : `redis` exige REDIS_URL ; en production, le stockage mémoire (par instance) est refusé. */
+function assertRateLimitConfiguration(env: Pick<ParsedEnv, 'RATE_LIMIT_STORE' | 'REDIS_URL'>, production: boolean): void {
+  if (production && env.RATE_LIMIT_STORE !== 'redis') {
+    throw new Error('Configuration invalide : RATE_LIMIT_STORE=redis est obligatoire en production.');
+  }
+  if (env.RATE_LIMIT_STORE === 'redis' && !env.REDIS_URL) {
+    throw new Error('Configuration invalide : REDIS_URL est requis avec RATE_LIMIT_STORE=redis.');
   }
 }

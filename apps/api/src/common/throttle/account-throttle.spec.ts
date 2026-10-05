@@ -21,4 +21,18 @@ describe('accountTracker (H1)', () => {
     }
     expect(accountTracker(undefined, { email: 'x' }, undefined)).toBe('ip:unknown');
   });
+
+  it('indexe mot de passe oublié et renvoi d’inscription sur un préfixe distinct de login', () => {
+    const body = { tenantSlug: 'Clinique', email: 'AWA@test.sn' };
+    expect(accountTracker('password_forgot', body, '1.2.3.4')).toBe(sha('pwd|clinique|awa@test.sn'));
+    expect(accountTracker('signup_resend', body, '1.2.3.4')).toBe(sha('signup|clinique|awa@test.sn'));
+    expect(accountTracker('password_forgot', body, '1.2.3.4')).not.toBe(accountTracker('login', body, '1.2.3.4'));
+  });
+
+  it('indexe la réinitialisation sur le jeton exact (sans normalisation de casse)', () => {
+    expect(accountTracker('password_reset', { token: 'AbC.def' }, '1.2.3.4')).toBe(sha('reset|AbC.def'));
+    expect(accountTracker('password_reset', { token: 'abc.def' }, '1.2.3.4')).not.toBe(sha('reset|AbC.def'));
+    expect(accountTracker('password_reset', { token: '' }, '1.2.3.4')).toBe('ip:1.2.3.4');
+    expect(accountTracker('password_reset', { token: 'x'.repeat(513) }, '1.2.3.4')).toBe('ip:1.2.3.4');
+  });
 });

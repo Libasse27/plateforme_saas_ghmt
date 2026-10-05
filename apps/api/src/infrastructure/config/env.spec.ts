@@ -40,12 +40,12 @@ describe('loadEnv : production', () => {
   });
 
   it('accepte la production quand les proxys de confiance sont déclarés', () => {
-    expect(loadEnv({ ...BASE, NODE_ENV: 'production', TRUSTED_PROXIES: '10.0.0.0/24', JWT_PLATFORM_SECRET: 'p'.repeat(40) }).TRUSTED_PROXIES).toEqual(['10.0.0.0/24']);
+    expect(loadEnv({ ...BASE, NODE_ENV: 'production', RATE_LIMIT_STORE: 'redis', REDIS_URL: 'rediss://cache:6380', TRUSTED_PROXIES: '10.0.0.0/24', JWT_PLATFORM_SECRET: 'p'.repeat(40) }).TRUSTED_PROXIES).toEqual(['10.0.0.0/24']);
   });
 });
 
 describe('loadEnv : secret JWT du realm plateforme (L1)', () => {
-  const PRODUCTION = { ...BASE, NODE_ENV: 'production', TRUSTED_PROXIES: '10.0.0.0/24' };
+  const PRODUCTION = { ...BASE, NODE_ENV: 'production', RATE_LIMIT_STORE: 'redis', REDIS_URL: 'rediss://cache:6380', TRUSTED_PROXIES: '10.0.0.0/24' };
 
   it('dérive un secret distinct de JWT_ACCESS_SECRET hors production quand JWT_PLATFORM_SECRET est absent', () => {
     const env = loadEnv(BASE);

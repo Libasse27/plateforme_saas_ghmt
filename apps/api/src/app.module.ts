@@ -2,7 +2,8 @@ import { type MiddlewareConsumer, Module, type NestModule } from '@nestjs/common
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
-import { ACCOUNT_THROTTLER } from './common/throttle/account-throttle';
+import { buildThrottlerOptions } from './common/throttle/throttler-options';
+import { ENV } from './infrastructure/config/env';
 import { sanitizeLogUrl } from './common/logging/sanitize-url';
 import { RequestContextMiddleware } from './common/context/request-context.middleware';
 import { ProblemDetailsFilter } from './common/filters/problem-details.filter';
@@ -22,10 +23,9 @@ import { PlatformModule } from './modules/platform/platform.module';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { OnboardingModule } from './modules/onboarding/onboarding.module';
 
 import { REDACTED_LOG_PATHS } from './common/logging/redact';
-
-const DEFAULT_RATE_LIMIT = { ttl: 60_000, limit: 300 } as const;
 
 @Module({
   imports: [
@@ -37,7 +37,7 @@ const DEFAULT_RATE_LIMIT = { ttl: 60_000, limit: 300 } as const;
         serializers: { req: (req: { id: unknown; method: string; url: string }) => ({ id: req.id, method: req.method, url: sanitizeLogUrl(req.url) }) },
       },
     }),
-    ThrottlerModule.forRoot([DEFAULT_RATE_LIMIT, ACCOUNT_THROTTLER]),
+    ThrottlerModule.forRootAsync({ inject: [ENV], useFactory: buildThrottlerOptions }),
     CoreModule,
     AuthModule,
     OrgModule,
@@ -50,6 +50,7 @@ const DEFAULT_RATE_LIMIT = { ttl: 60_000, limit: 300 } as const;
     BillingModule,
     NotificationsModule,
     AdminModule,
+    OnboardingModule,
   ],
   controllers: [HealthController],
   providers: [

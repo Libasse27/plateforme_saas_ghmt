@@ -10,7 +10,7 @@ const BASE = {
   DATA_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString('base64'),
   BLIND_INDEX_KEY: Buffer.alloc(32, 2).toString('base64'),
 };
-const PRODUCTION = { ...BASE, NODE_ENV: 'production', TRUSTED_PROXIES: '10.0.0.0/8', JWT_PLATFORM_SECRET: 'p'.repeat(40) };
+const PRODUCTION = { ...BASE, NODE_ENV: 'production', RATE_LIMIT_STORE: 'redis', REDIS_URL: 'rediss://cache:6380', TRUSTED_PROXIES: '10.0.0.0/8', JWT_PLATFORM_SECRET: 'p'.repeat(40) };
 
 describe('loadEnv : notifications (valeurs par défaut)', () => {
   it('applique les défauts du contrat', () => {

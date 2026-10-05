@@ -197,3 +197,5 @@ export * from './platform';
 export * from './subscriptions';
 export * from './billing';
 export * from './payments';
+export * from './notifications';
+export * from './admin';

@@ -107,6 +107,8 @@ export const PERMISSION_CATALOG = {
     notification_template: ['read', 'update'],
     integration: ['read', 'update'],
     module: ['read'],
+    /** Journal des envois de notifications (docs/10 §4). */
+    notification_log: ['read'],
   },
   audit: {
     log: ['read', 'export'],

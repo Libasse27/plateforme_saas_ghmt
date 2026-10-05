@@ -44,8 +44,8 @@ export class SmsWebhooksController {
 }
 
 /**
- * Webhooks du sandbox SMS : sans signature, donc enregistrés SEULEMENT si `SMS_SANDBOX_WEBHOOKS_ENABLED=true`
- * (voir notifications.module.ts) et, en plus, 404 si le fournisseur actif n'est pas le sandbox.
+ * Webhooks du sandbox SMS : sans signature, donc 404 (`assertSandbox`) sauf si `SMS_SANDBOX_WEBHOOKS_ENABLED=true` (env validé,
+ * pas `process.env` lu à l'import, qui précède le chargement de `.env`) et que le fournisseur actif est le sandbox.
  */
 @Controller('webhooks/sms')
 @Public()

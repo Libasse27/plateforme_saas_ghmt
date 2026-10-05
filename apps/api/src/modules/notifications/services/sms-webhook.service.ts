@@ -22,7 +22,7 @@ const invalidSignature = (): DomainError => new DomainError('invalid_signature',
 /**
  * Webhooks SMS (docs/10 §5.7) : accusés de réception et messages entrants. L'adaptateur `http` est authentifié par HMAC
  * (`x-ghmt-timestamp` ± 300 s, `x-ghmt-signature = hex(HMAC(secret, "<timestamp>.<corps brut>"))`, temps constant) ; le
- * sandbox n'a aucune signature et n'existe que si `SMS_PROVIDER=sandbox`. Un `clientRef` inconnu ne révèle rien (204).
+ * sandbox n'a aucune signature et répond 404 sauf si `SMS_SANDBOX_WEBHOOKS_ENABLED=true` et `SMS_PROVIDER=sandbox`. Un `clientRef` inconnu ne révèle rien (204).
  */
 @Injectable()
 export class SmsWebhookService {
@@ -37,9 +37,9 @@ export class SmsWebhookService {
     @Inject(ENV) private readonly env: Env,
   ) {}
 
-  /** Routes `sandbox/*` : 404 sauf si le fournisseur actif est le sandbox. */
+  /** Routes `sandbox/*` : 404 sauf si `SMS_SANDBOX_WEBHOOKS_ENABLED=true` et que le fournisseur actif est le sandbox. */
   assertSandbox(): void {
-    if (this.env.SMS_PROVIDER !== 'sandbox') throw notFound();
+    if (!this.env.SMS_SANDBOX_WEBHOOKS_ENABLED || this.env.SMS_PROVIDER !== 'sandbox') throw notFound();
   }
 
   /** Routes `http/*` : 404 si l'adaptateur ou le secret manquent, 401 si la signature ou l'horodatage sont invalides. */

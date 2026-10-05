@@ -67,6 +67,28 @@ const BY_CODE: Readonly<Record<string, string>> = {
   mfa_not_pending: 'Aucun enrôlement en cours : recommencez la génération du QR code.',
   mfa_enrollment_required_cli: 'Ce compte doit d\'abord être activé par l\'équipe d\'exploitation (enrôlement du second facteur).',
   mfa_enrollment_required: 'Activez l\'authentification à deux facteurs pour accéder à la console plateforme.',
+  // Console d'administration de l'établissement et notifications
+  invitation_email_failed: 'Le compte a été créé, mais l\'e-mail d\'invitation n\'a pas pu être envoyé : ouvrez la fiche de l\'utilisateur et renvoyez l\'invitation.',
+  last_admin: 'Action impossible : ce serait le dernier administrateur actif de l\'établissement.',
+  email_already_used: 'Cette adresse e-mail est déjà utilisée par un autre compte.',
+  role_code_conflict: 'Ce code de rôle est déjà utilisé.',
+  system_role_immutable: 'Les rôles système ne peuvent pas être modifiés ni supprimés.',
+  role_in_use: 'Ce rôle est encore affecté à des utilisateurs : retirez ses affectations avant de le supprimer.',
+  privilege_escalation: 'Vous ne pouvez pas accorder une permission que vous ne détenez pas vous-même.',
+  site_code_conflict: 'Ce code de site existe déjà.',
+  department_code_conflict: 'Ce code de service existe déjà sur ce site.',
+  main_site: 'Le site principal ne peut pas être supprimé.',
+  site_has_departments: 'Ce site contient des services : supprimez-les ou déplacez-les d\'abord.',
+  department_has_children: 'Ce service contient des sous-services : supprimez-les d\'abord.',
+  assignment_exists: 'Cet utilisateur a déjà cette affectation (même rôle, même portée).',
+  out_of_scope: 'Cet élément est hors de votre périmètre.',
+  invalid_validity: 'La date de fin de validité doit être postérieure à aujourd\'hui.',
+  user_disabled: 'Ce compte est désactivé : réactivez-le avant cette action.',
+  scope_not_found: 'Le site ou le service choisi est introuvable.',
+  invalid_parent: 'Le service parent choisi n\'est pas valide.',
+  empty_update: 'Indiquez au moins une information à modifier.',
+  range_too_large: 'La période demandée est trop longue : réduisez-la.',
+  preference_locked: 'Cette préférence est verrouillée et ne peut pas être modifiée.',
 };
 
 const BY_STATUS: Readonly<Record<number, string>> = {
@@ -115,6 +137,10 @@ function describeWithDetails(error: ErrorLike, options: DescribeOptions): string
     const lines = Array.isArray(details.violations) ? details.violations.map(violationText).filter((line): line is string => line !== null) : [];
     const base = 'Ce plan est incompatible avec votre usage actuel : réduisez-le sous les limites du nouveau plan avant de changer.';
     return lines.length > 0 ? `${base} Dépassements : ${lines.join(' ; ')}.` : base;
+  }
+  if (error.code === 'export_too_large') {
+    const count = typeof details.count === 'number' ? ` (${String(details.count)} lignes)` : '';
+    return `L'export dépasse 10 000 lignes${count} : réduisez la période ou ajoutez des filtres.`;
   }
   if (error.code === 'plan_limit_reached') {
     const metric = typeof details.metric === 'string' ? (METRIC_LABELS[details.metric] ?? details.metric) : null;

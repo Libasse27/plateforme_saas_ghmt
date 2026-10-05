@@ -490,6 +490,105 @@ Variables d'environnement : `PAYMENTS_SANDBOX_ENABLED` (**faux par défaut**, à
 
 *Cycle de vie* (`SubscriptionStateMachine`, job horaire `runLifecycle(now)`) : `trial → active | expired` ; `active → active | past_due | cancelled` ; `past_due → active | grace` (J+7 après la fin de période) ; `grace → active | suspended` (J+15) ; `suspended → active | expired` (J+75) ; `cancelled → active | expired` (90 j après la résiliation) ; `expired → active`. Factures émises à J-7 (renouvellement ou conversion d'essai), prorata à l'upgrade ; numéro `GHMT-{PAYS}-{AAAA}-{000001}` sans trou (compteur verrouillé dans la transaction d'émission), TVA de `platform.billing_entities` (repli `ZZ`). `payment.succeeded` (`saas_invoice`) ou validation d'un paiement manuel ⇒ facture `paid`, abonnement `active`, nouvelle période = ancienne fin + durée (réactivation : à partir du paiement), idempotent. `suspended` / `expired` ⇒ `platform.tenants.status = 'suspended'` (lecture seule ; `403 subscription_suspended` sauf création de patient, encaissement, ouverture de caisse, lectures, exports et impressions, et les routes `@AllowWhenSuspended` d'abonnement). `grace` ⇒ `403 subscription_grace` pour la création / invitation d'utilisateurs et les exports. Événement `subscription.status_changed` publié après commit.
 
+**Notifications et console d'administration de l'établissement (docs/10-phase-notifications-admin.md §5 et §6, priment sur 4.16, 4.18 et 4.19)** — chemins sous `/api/v1`, dates ISO 8601 UTC, montants en chaînes décimales, erreurs `problem+json` enveloppées. Identifiant mal formé ⇒ `404`. Ressource d'un autre tenant ou d'un autre utilisateur ⇒ `404`. Les schémas Zod sont dans `packages/shared/src/schemas/notifications.ts` (équipe N) et `admin.ts` (équipe A).
+
+*Notifications — boîte in-app (`@AuthenticatedOnly`)*
+
+| Méthode | Chemin | Corps / requête | Réponse | Erreurs |
+|---|---|---|---|---|
+| GET | `/notifications/inbox` | `listInboxQuerySchema` `{ unreadOnly?: 'true' \| 'false', limit 1..50 (20), cursor? }` | `Page<InAppMessageView>` triée `id` décroissant (UUID v7) | 422 `cursor` |
+| GET | `/notifications/inbox/unread-count` | — | `{ count, capped }` (plafonné à 999) | — |
+| POST | `/notifications/inbox/{id}/read` | — | 200 `InAppMessageView` (idempotent) | 404 |
+| POST | `/notifications/inbox/read-all` | — | 200 `{ updated }` | — |
+
+`InAppMessageView = { id, typeCode, title, body, link \| null, createdAt, readAt \| null }`. Les messages expirés (`expires_at`) ne sont jamais renvoyés.
+
+*Notifications — préférences personnelles (`@AuthenticatedOnly`)*
+
+| Méthode | Chemin | Corps | Réponse | Erreurs |
+|---|---|---|---|---|
+| GET | `/notifications/preferences` | — | `{ items: NotificationPreferenceView[] }` | — |
+| PUT | `/notifications/preferences` | `updateNotificationPreferencesSchema` `{ items: [{ category: 'administrative', channel: 'email' \| 'inapp', enabled }] (1..10) }` | idem | 422 `preference_locked` (`errors[].path = items.N`) |
+
+`NotificationPreferenceView = { category, channel, enabled, locked, note \| null }`. `administrative/inapp` est toujours `locked: true` (activé) ; `administrative/email` est modifiable (la note précise que les relances de facturation restent envoyées aux administrateurs). Audit `notification.preferences_updated`.
+
+*Notifications — paramètres, modèles, journal des envois*
+
+| Méthode | Chemin | Permission | Corps / requête | Réponse | Erreurs |
+|---|---|---|---|---|---|
+| GET | `/notifications/settings` | `settings:notification_template:read` | — | `NotificationSettingsView` | — |
+| PUT | `/notifications/settings` | `settings:notification_template:update` | `updateNotificationSettingsSchema` (champs optionnels, au moins un ; heures `^([01]\d\|2[0-3]):[0-5]\d$`, `senderDisplayName` 2..30 ou `null`) | `NotificationSettingsView` | 422 `invalid_quiet_hours`, 422 validation |
+| GET | `/notifications/templates` | `…:read` | `?typeCode=` | `NotificationTemplateView[]` (modèle **effectif** par type × canal × langue) | — |
+| PUT | `/notifications/templates/{typeCode}/{channel}/{locale}` | `…:update` | `upsertNotificationTemplateSchema` `{ subject?: ≤150, body: 1..5000 }` | 200 `NotificationTemplateView` (`source: custom`, version + 1) | 404 `template_not_found` ; 422 `template_rejected` |
+| DELETE | `/notifications/templates/{typeCode}/{channel}/{locale}` | `…:update` | — | 204 (retour au modèle par défaut) | 404 si aucune surcharge |
+| POST | `/notifications/templates/preview` | `…:read` | `previewNotificationTemplateSchema` `{ typeCode, channel, locale, subject?, body }` | 200 `TemplatePreviewView` (même si le linter signale des problèmes) | 422 validation |
+| GET | `/notifications/deliveries` | `settings:notification_log:read` | `listDeliveriesQuerySchema` `{ status?, channel?, typeCode?, from?, to? (7 j par défaut, 31 j au plus ⇒ 422 range_too_large), limit 1..100 (50), cursor? }` | `Page<NotificationDeliveryView>` | 422 |
+
+- `NotificationSettingsView = { quietHoursStart 'HH:MM', quietHoursEnd, smsTransliterate, senderDisplayName \| null, appointmentSmsEnabled, reminderD1Enabled, reminderD1LocalTime 'HH:MM', reminderH2Enabled, smsProvider: 'none' \| 'sandbox' \| 'http', smsUsage: { month 'AAAA-MM', usedSegments, limit \| null }, updatedAt \| null }`. Audit `notification.settings_updated`.
+- `NotificationTemplateView = { typeCode, channel, locale, source: 'default' \| 'custom', version, subject \| null, body, variables: string[], updatedAt \| null }` ; `TemplatePreviewView = { subject \| null, body, characters, segments \| null, encoding \| null, issues: [{ path, code, message }] }`.
+- `template_rejected` (`errors[]`) : `unknown_variable`, `forbidden_term`, `service_name`, `too_many_segments` (SMS > 3), `too_long`, `subject_required` (e-mail, in-app), `subject_forbidden` (SMS). Le linter de confidentialité est bloquant : variables en liste blanche, termes de santé interdits (FR/EN, insensible à la casse et aux accents), aucun nom de service du tenant, SMS ≤ 3 segments. Audit `notification.template_updated` / `notification.template_reset` (`{ typeCode, channel, locale, version }`, jamais le texte).
+- `NotificationDeliveryView = { id, typeCode, channel, status, suppressionReason, recipientType, recipientMasked \| null, subjectType, subjectId, attempts, errorClass, errorCode, provider, createdAt, scheduledAt, sentAt, deliveredAt }` ; jamais de `recipientId` pour un patient, ni de nom, ni de texte. Audit `notification.deliveries_listed` (`{ resultCount }`).
+
+*Notifications — consentement du patient aux rappels*
+
+| Méthode | Chemin | Permission | Corps | Réponse | Erreurs |
+|---|---|---|---|---|---|
+| GET | `/patients/{patientId}/contact-consents` | `patients:consent:read` | — | `ContactConsentsView` | 404 (patient inconnu, autre tenant ou hors périmètre de `patients:patient:read`) |
+| POST | `/patients/{patientId}/contact-consents` | `patients:consent:create`, `@AllowWhenSuspended` | `recordContactConsentSchema` `{ channel: 'sms' \| 'email', purpose: 'appointment_reminder', granted, source: 'front_desk' \| 'patient_request' }` | 201 `ContactConsentsView` | 404 ; 422 |
+
+`ContactConsentsView = { patientId, current: [{ channel, purpose, granted, source \| null, recordedAt \| null }] (sms et email, `granted: false` si jamais recueilli), history: ContactConsentEntry[] (50 dernières) }`. Audit `patient.consents_read` (lecture) et `patient.consent_changed` (écriture, avec `patientId`). Une révocation passe les rappels en attente du canal à `suppressed / no_consent` dans la même transaction.
+
+*Notifications — webhooks SMS (`@Public`, 60 requêtes/min/IP, corps 64 Ko au plus)*
+
+| Méthode | Chemin | Corps | Réponse |
+|---|---|---|---|
+| POST | `/webhooks/sms/http/delivery` | `smsDeliveryWebhookSchema` `{ clientRef: '<tenantId>.<notificationId>', status: 'delivered' \| 'undeliverable' \| 'failed', providerMessageId?, errorCode? ≤50 }` | 204 |
+| POST | `/webhooks/sms/http/inbound` | `smsInboundWebhookSchema` `{ from: E.164, text: ≤1600, receivedAt? }` | 204 |
+| POST | `/webhooks/sms/sandbox/delivery` · `/webhooks/sms/sandbox/inbound` | mêmes corps, **sans signature** | 204 ; **404 si `SMS_PROVIDER ≠ sandbox`** |
+
+Signature `http` : en-têtes `x-ghmt-timestamp` (secondes Unix, ± 300 s) et `x-ghmt-signature = hex(HMAC-SHA256(SMS_HTTP_WEBHOOK_SECRET, "<timestamp>.<corps brut>"))`, comparée en temps constant ; absente ou invalide ⇒ `401 invalid_signature` ; adaptateur ou secret non configurés ⇒ `404`. Accusé de réception : `delivered` ⇒ `delivered` ; `undeliverable` / `failed` ⇒ `failed` (`permanent_recipient`) ; traitement idempotent ; `clientRef` inconnu ⇒ 204 (pas d'oracle). STOP (texte normalisé égal à `STOP` ou `ARRET`, ou commençant par `STOP `) : le consentement SMS aux rappels est révoqué dans chaque établissement ayant écrit à ce numéro depuis 180 jours (audit `patient.consent_changed`, acteur `system`) et les rappels SMS en attente sont supprimés. Le détail du traitement (outbox, dispatcher, retries, jobs, règles de planification) est décrit dans docs/10 §5.8 et §5.9.
+
+*Console d'administration — journal d'audit du tenant (équipe A)*
+
+| Méthode | Chemin | Permission | Corps / requête | Réponse | Erreurs |
+|---|---|---|---|---|---|
+| GET | `/audit-logs` | `audit:log:read` | `listAuditLogsQuerySchema` = filtres + `{ limit 1..100 (50), cursor? }` | `Page<AuditLogView>` trié `chain_seq` décroissant | 422 (curseur, plage, filtre) |
+| POST | `/audit-logs/export` | `audit:log:export`, 5 requêtes / 10 min / IP | `exportAuditLogsSchema` = filtres | 200 `text/csv; charset=utf-8` (non enveloppé) | 422 `export_too_large` (`details { count, max: 10000 }`) ; 403 `subscription_grace` (automatique) ; 429 |
+| GET | `/audit-logs/verify` | `audit:log:read`, 3 requêtes / min / IP | `verifyAuditChainQuerySchema` `{ limit 1000..50000 (50000) }` | `AuditChainVerificationView` | 422 ; 429 |
+
+- **Filtres** (`auditLogFiltersSchema`) : `from?`, `to?` (ISO ; par défaut les 7 derniers jours ; 92 jours au plus, sinon `422 range_too_large`), `actorUserId?` uuid, `action?` (`^[a-z_]+(\.[a-z_]+)*(\.\*)?$`, le suffixe `.*` désigne un préfixe), `resourceType?` (`^[a-z_]{1,50}$`), `resourceId?` uuid, `outcome?` (`success` \| `denied` \| `failure`). Le curseur vaut `chain_seq` décimal encodé en base64url, validé par `^\d{1,19}$` (422 `cursor` sinon).
+- `AuditLogView = { id, seq: string, occurredAt, actor: { type, userId \| null, fullName \| null }, action, resourceType \| null, resourceId \| null, patientId \| null, outcome, ip \| null, requestId \| null, changes: object \| null }`. `fullName` vient d'une jointure sur `tenant.users`, jamais d'un patient.
+- **Assainissement de `changes`** (listes et export) : clés masquées par `"[masqué]"` à toute profondeur (`forceReason`, `cancelReason`, `comment`, `note`, `notes`, `description`, `label`, `printLabel`, `voidReason`, `text`, `body`, `subject`, `motif`, `diagnosis`, `address`, `phone`, `email`, `nationalId`, `firstName`, `lastName`, `fullName`, `birthDate`, `q`, `query`, `term`) ; `reason` conservé seulement s'il ressemble à un code (`^[a-z0-9_.:-]{1,64}$`), masqué sinon ; chaînes tronquées à 200 caractères ; `patientIds` limité à 50 éléments avec `patientIdsCount`. Aucune donnée clinique n'est restituée.
+- **Lecture auditée** : `audit.logs_read` (filtres effectifs, nombre de résultats).
+- **Export CSV** : BOM UTF-8, séparateur `;`, `Content-Disposition: attachment; filename="journal-audit-AAAAMMJJ-AAAAMMJJ.csv"`. Colonnes : `seq;horodatage_utc;type_acteur;id_acteur;nom_acteur;action;type_ressource;id_ressource;id_patient;resultat;ip;id_requete;details_json`. Une cellule commençant par `= + - @` tabulation ou retour chariot est préfixée de `'` (injection de formules). Audit `audit.logs_exported` (filtres, nombre de lignes, SHA-256 du fichier) écrit **avant** l'envoi, dans la transaction de lecture. La permission `audit:log:export` est bloquée en période de grâce (`403 subscription_grace`) comme tout export.
+- **Vérification d'intégrité** : relit les `limit` derniers maillons par lots de 1 000, recalcule les empreintes (`auditPayload`, `verifyChain`, `GENESIS_HASH` si la fenêtre commence à 1). `AuditChainVerificationView = { status: 'intact' \| 'broken' \| 'empty', checkedCount, fromSeq, toSeq, firstBrokenSeq \| null, checkedAt }` (numéros en chaînes). Audit `audit.chain_verified`.
+
+*Console d'administration — tableau de bord de l'établissement*
+
+| Méthode | Chemin | Permission | Requête | Réponse | Erreurs |
+|---|---|---|---|---|---|
+| GET | `/dashboards/establishment` | `reports:dashboard:read` | `dashboardQuerySchema` `{ siteId? }` | `EstablishmentDashboardView` | 422 `not_found` sur `siteId` |
+
+```
+EstablishmentDashboardView = {
+  date: 'AAAA-MM-JJ' (fuseau du tenant), timezone, generatedAt, siteId | null,
+  patients: { total, registeredToday } | null,
+  appointments: { total, byStatus: Record<AppointmentStatus, number> (8 clés, zéros compris) } | null,
+  revenue: { currency, total: "…", byMethod: { cash, mobile_money, card, other } } | null,
+  cashSessions: { openCount, items: [{ id, registerCode, siteId, openedAt, openedBy: { id, fullName } }] } | null }
+```
+
+| Section | Permission requise | Module requis | Contenu |
+|---|---|---|---|
+| `patients` | `patients:patient:read` | — | non supprimés |
+| `appointments` | `appointments:appointment:read` ou `appointments:agenda:read` | `appointments` | RDV non supprimés du jour |
+| `revenue` | `cashier:payment:read` ou `billing:invoice:read` | `billing` ou `cashier` | `tenant.payments` `succeeded` dont `paid_at` tombe dans la journée, site de la facture |
+| `cashSessions` | `cashier:cash_session:read` | `cashier` | sessions `open` |
+
+Une section est `null` si la permission ou le module manque. Chaque section est filtrée par la portée de la permission qui l'ouvre (sites et sites des services) et par `siteId` s'il est fourni ; un `siteId` hors portée ne révèle rien (sections vides). Aucune donnée nominative de patient, pas d'audit (comptes uniquement). Dans l'implémentation, la portée des rendez-vous suit celle du module `appointments` (site du rendez-vous ou service du praticien) et la section « recettes » ne totalise que la devise de base du tenant.
+
+*Permissions* (docs/10 §4) : `settings:notification_log:read` (tenant_admin, director), `settings:notification_template:read|update` (tenant_admin r/u, director r), `patients:consent:read|create` (receptionist, admin_agent, doctor, nurse, midwife), `audit:log:read` (tenant_admin, director), `audit:log:export` (tenant_admin), `reports:dashboard:read` (tenant_admin, director, doctor, accountant). La migration `20261005000500_admin_console` rattrape ces permissions pour les rôles système des établissements existants (idempotente).
+
 ### 4.1 Auth (`/auth`)
 
 | Méthode | Chemin | Permission | Description |

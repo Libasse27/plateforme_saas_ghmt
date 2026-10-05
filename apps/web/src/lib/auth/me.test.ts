@@ -80,10 +80,10 @@ describe('requiredStepPath', () => {
 describe('navigation', () => {
   it('masque les entrées sans permission ou sans module', () => {
     const me = parseMe({ ...RAW, permissions: ['patients:patient:read'], modules: ['patients'] });
-    expect(visibleNav(me).map((i) => i.href)).toEqual(['/', '/patients', '/securite/mfa', '/securite/mot-de-passe']);
+    expect(visibleNav(me).map((i) => i.href)).toEqual(['/', '/patients', '/notifications', '/securite/mfa', '/securite/mot-de-passe']);
   });
   it('affiche tout pour un administrateur complet', () => {
-    expect(visibleNav(parseMe(RAW)).map((i) => i.href)).toEqual(['/', '/patients', '/rendez-vous', '/securite/mfa', '/securite/mot-de-passe']);
+    expect(visibleNav(parseMe(RAW)).map((i) => i.href)).toEqual(['/', '/patients', '/rendez-vous', '/notifications', '/administration/praticiens', '/securite/mfa', '/securite/mot-de-passe']);
   });
   it('isActivePath', () => {
     expect(isActivePath('/', '/')).toBe(true);

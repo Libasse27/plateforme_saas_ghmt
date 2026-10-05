@@ -8,6 +8,7 @@ export const SENSITIVE_HEADERS = [
   'x-webhook-signature',
   'x-hub-signature',
   'x-hub-signature-256',
+  'x-ghmt-signature',
   'x-api-key',
   'x-csrf-token',
 ] as const;

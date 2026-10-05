@@ -51,7 +51,7 @@ describe('iam : invitations (C6)', () => {
 
       const res = await publicCall(http().get(`${INVITATIONS}/${token}`)).expect(200);
 
-      expect(res.body.data).toEqual({ email, fullName: 'Fatou Invitée', tenantName: `Clinique ${a.slug}` });
+      expect(res.body.data).toEqual({ email, fullName: 'Fatou Invitée', tenantName: `Clinique ${a.slug}`, tenantSlug: a.slug });
     });
 
     it.each([

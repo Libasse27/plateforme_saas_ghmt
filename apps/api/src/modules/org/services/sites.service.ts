@@ -1,3 +1,4 @@
+import { findForbiddenTerms } from '../../notifications/domain/privacy-terms';
 import { Injectable } from '@nestjs/common';
 import { AuditService } from '../../../common/audit/audit.service';
 import { EntitlementService } from '../../../common/authz/entitlement.service';
@@ -38,6 +39,7 @@ export class SitesService {
   }
 
   async create(input: CreateSiteInput) {
+    assertDisplayableName(input.name);
     const principal = this.context.requirePrincipal();
     // Un nouveau site n'appartient à aucune portée existante : réservé à la portée établissement.
     if (!scopesFor('org:site:create', this.context.grants).allTenant) {
@@ -62,6 +64,7 @@ export class SitesService {
   }
 
   async update(id: string, input: UpdateSiteInput) {
+    if (input.name !== undefined) assertDisplayableName(input.name);
     const principal = this.context.requirePrincipal();
     return this.tenantDb.run(async (tx) => {
       const current = await this.requireSite(tx, id);
@@ -124,5 +127,15 @@ export class SitesService {
     const site = await tx.site.findFirst({ where: { id, deletedAt: null }, select: SITE_SELECT });
     if (!site) throw DomainError.notFound('Site');
     return site;
+  }
+}
+
+/**
+ * Le nom d'un site figure dans les SMS destinés aux patients (docs/10 §5.9) : il passe le contrôle des termes interdits
+ * (service sensible, pathologie…), sinon 422 à l'enregistrement.
+ */
+function assertDisplayableName(name: string): void {
+  if (findForbiddenTerms(name).length > 0) {
+    throw DomainError.validation([{ path: 'name', code: 'forbidden_term', message: 'Ce nom contient un terme interdit : il apparaît dans les messages aux patients.' }]);
   }
 }

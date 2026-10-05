@@ -7,13 +7,20 @@ import { FormMessage } from '@/components/ui/FormMessage';
 import { SubmitButton } from '@/components/ui/SubmitButton';
 import { EMPTY_FORM_STATE } from '@/lib/forms';
 
-export function InvitationForm({ token }: { readonly token: string }) {
+export interface InvitationFormProps {
+  readonly token: string;
+  /** Code établissement de l'invitation, repris pour pré-remplir la connexion. */
+  readonly tenantSlug?: string;
+}
+
+export function InvitationForm({ token, tenantSlug }: InvitationFormProps) {
   const [state, formAction] = useActionState(acceptInvitationAction, EMPTY_FORM_STATE);
   const errors = state.fieldErrors ?? {};
   return (
     <form action={formAction} className="space-y-4" noValidate>
       <FormMessage state={state} />
       <input type="hidden" name="token" value={token} />
+      {tenantSlug ? <input type="hidden" name="tenantSlug" value={tenantSlug} /> : null}
       <TextField
         name="password"
         type="password"

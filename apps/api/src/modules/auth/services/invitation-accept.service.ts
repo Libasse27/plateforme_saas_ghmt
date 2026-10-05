@@ -34,7 +34,7 @@ export class InvitationAcceptService {
       const pending = await this.findPending(tx, parsed);
       if (!pending) return undefined;
       const profile = await loadTenantProfile(tx);
-      return { email: pending.email, fullName: pending.fullName, tenantName: profile.name };
+      return { email: pending.email, fullName: pending.fullName, tenantName: profile.name, tenantSlug: profile.slug };
     });
     if (!result) throw invitationExpired();
     return result;

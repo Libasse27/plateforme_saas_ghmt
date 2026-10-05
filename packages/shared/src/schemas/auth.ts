@@ -60,6 +60,8 @@ export interface InvitationPreview {
   readonly email: string;
   readonly fullName: string;
   readonly tenantName: string;
+  /** Code établissement à saisir à la connexion. */
+  readonly tenantSlug: string;
 }
 
 export interface TenantProfile {

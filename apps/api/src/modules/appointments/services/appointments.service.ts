@@ -11,6 +11,7 @@ import { AuditService } from '../../../common/audit/audit.service';
 import { scopesFor } from '../../../common/authz/authorization.service';
 import { EntitlementService } from '../../../common/authz/entitlement.service';
 import { RequestContext } from '../../../common/context/request-context';
+import { enqueueOutboxEvent } from '../../../common/notifications/outbox';
 import { DomainError } from '../../../common/errors/domain-error';
 import { Page, decodeDateIdCursor } from '../../../common/pagination/page';
 import { Clock } from '../../../common/time/clock';
@@ -101,6 +102,7 @@ export class AppointmentsService {
         patientId: row.patientId,
         changes: { practitionerId: row.practitionerId, siteId: row.siteId, source: row.source },
       });
+      await enqueueOutboxEvent(tx, tenantId, { eventType: 'appointment.created', aggregateId: row.id, payload: { startsAt: row.startsAt.toISOString() } });
       return this.view(await this.requireInScope(tx, tenantId, row.id, scope));
     });
   }
@@ -175,6 +177,11 @@ export class AppointmentsService {
         patientId: current.patientId,
         changes: { fields: ['startsAt', 'endsAt'] },
       });
+      await enqueueOutboxEvent(tx, tenantId, {
+        eventType: 'appointment.rescheduled',
+        aggregateId: id,
+        payload: { startsAt: new Date(input.startsAt).toISOString(), previousStartsAt: current.startsAt.toISOString() },
+      });
       return this.view(await this.requireInScope(tx, tenantId, id, scope));
     });
   }
@@ -205,6 +212,9 @@ export class AppointmentsService {
         patientId: current.patientId,
         changes: { from: current.status, to: input.status },
       });
+      if (input.status === 'cancelled') {
+        await enqueueOutboxEvent(tx, tenantId, { eventType: 'appointment.cancelled', aggregateId: id, payload: { startsAt: current.startsAt.toISOString() } });
+      }
       return this.view(await this.requireInScope(tx, tenantId, id, scope));
     });
   }
@@ -222,6 +232,7 @@ export class AppointmentsService {
         resourceId: id,
         patientId: current.patientId,
       });
+      await enqueueOutboxEvent(tx, tenantId, { eventType: 'appointment.deleted', aggregateId: id, payload: { startsAt: current.startsAt.toISOString() } });
     });
   }
 

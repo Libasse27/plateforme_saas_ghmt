@@ -1,0 +1,190 @@
+// Équipe N (docs/10 §3.1) : outbox, journal d'envoi, in-app, modèles, paramètres, préférences, consentements.
+// Règle : aucun champ de relation vers core.prisma, billing.prisma ou platform-saas.prisma ; les clés étrangères
+// (tenant, utilisateurs, patients…) sont créées en SQL dans la migration 20261005000400_notifications.
+// Les énumérations sont des `text` + CHECK (SQL).
+
+model NotificationOutboxEvent {
+  id            String    @default(uuid(7)) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  eventType     String    @map("event_type")
+  aggregateType String    @map("aggregate_type")
+  aggregateId   String    @map("aggregate_id") @db.Uuid
+  /// Identifiants et dates seulement ({ startsAt, previousStartsAt? }) : jamais de donnée de santé.
+  payload       Json      @default("{}")
+  status        String    @default("pending")
+  attempts      Int       @default(0)
+  availableAt   DateTime  @default(now()) @map("available_at") @db.Timestamptz(6)
+  processedAt   DateTime? @map("processed_at") @db.Timestamptz(6)
+  lastErrorCode String?   @map("last_error_code")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([tenantId, id])
+  @@map("notification_outbox")
+  @@schema("tenant")
+}
+
+/// Une ligne = un message, sur un canal, à un destinataire. C'est aussi le journal de livraison (aucun texte rendu, aucun clair).
+model Notification {
+  id                String    @default(uuid(7)) @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  typeCode          String    @map("type_code")
+  category          String
+  channel           String
+  recipientType     String    @map("recipient_type")
+  recipientId       String    @map("recipient_id") @db.Uuid
+  subjectType       String?   @map("subject_type")
+  subjectId         String?   @map("subject_id") @db.Uuid
+  subjectVersion    String?   @map("subject_version")
+  sourceEventId     String?   @map("source_event_id") @db.Uuid
+  dedupKey          String    @map("dedup_key") @db.Char(64)
+  locale            String
+  /// Sans PHI. Relances : { invoiceNumber, amount, currency, dueAt, offsetDays }. Quota : { month, thresholdPercent, limit }.
+  context           Json      @default("{}")
+  status            String    @default("queued")
+  suppressionReason String?   @map("suppression_reason")
+  scheduledAt       DateTime  @map("scheduled_at") @db.Timestamptz(6)
+  nextAttemptAt     DateTime  @map("next_attempt_at") @db.Timestamptz(6)
+  deadlineAt        DateTime? @map("deadline_at") @db.Timestamptz(6)
+  attempts          Int       @default(0) @db.SmallInt
+  lockedUntil       DateTime? @map("locked_until") @db.Timestamptz(6)
+  templateSource    String?   @map("template_source")
+  templateVersion   Int?      @map("template_version")
+  /// Adresse masquée (+22177*****45) et HMAC : jamais le clair.
+  recipientMasked   String?   @map("recipient_masked")
+  recipientHash     Bytes?    @map("recipient_hash")
+  provider          String?
+  providerMessageId String?   @map("provider_message_id")
+  segments          Int?      @db.SmallInt
+  encoding          String?
+  errorClass        String?   @map("error_class")
+  errorCode         String?   @map("error_code")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  sentAt            DateTime? @map("sent_at") @db.Timestamptz(6)
+  deliveredAt       DateTime? @map("delivered_at") @db.Timestamptz(6)
+  failedAt          DateTime? @map("failed_at") @db.Timestamptz(6)
+  suppressedAt      DateTime? @map("suppressed_at") @db.Timestamptz(6)
+
+  @@id([tenantId, id])
+  @@unique([tenantId, dedupKey])
+  @@map("notifications")
+  @@schema("tenant")
+}
+
+/// Ajout seul (REVOKE UPDATE, DELETE). FK composite vers notifications créée en SQL.
+model NotificationAttempt {
+  id                String   @default(uuid(7)) @db.Uuid
+  tenantId          String   @map("tenant_id") @db.Uuid
+  notificationId    String   @map("notification_id") @db.Uuid
+  attempt           Int      @db.SmallInt
+  outcome           String
+  provider          String?
+  providerMessageId String?  @map("provider_message_id")
+  errorClass        String?  @map("error_class")
+  errorCode         String?  @map("error_code")
+  occurredAt        DateTime @default(now()) @map("occurred_at") @db.Timestamptz(6)
+
+  @@id([tenantId, id])
+  @@index([tenantId, notificationId, attempt])
+  @@map("notification_attempts")
+  @@schema("tenant")
+}
+
+model InAppMessage {
+  id             String    @default(uuid(7)) @db.Uuid
+  tenantId       String    @map("tenant_id") @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  notificationId String?   @map("notification_id") @db.Uuid
+  typeCode       String    @map("type_code")
+  title          String    @db.VarChar(120)
+  body           String    @db.VarChar(500)
+  link           String?   @db.VarChar(200)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  readAt         DateTime? @map("read_at") @db.Timestamptz(6)
+  expiresAt      DateTime  @map("expires_at") @db.Timestamptz(6)
+
+  @@id([tenantId, id])
+  @@unique([tenantId, notificationId])
+  @@map("inapp_messages")
+  @@schema("tenant")
+}
+
+/// Surcharges du tenant : une ligne immuable par version (seul `is_active` est modifiable), une seule version active.
+model NotificationTemplate {
+  id        String   @default(uuid(7)) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  typeCode  String   @map("type_code")
+  channel   String
+  locale    String
+  version   Int
+  subject   String?  @db.VarChar(150)
+  body      String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdBy String?  @map("created_by") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([tenantId, id])
+  @@unique([tenantId, typeCode, channel, locale, version])
+  @@map("notification_templates")
+  @@schema("tenant")
+}
+
+/// Au plus une ligne par tenant ; absente = valeurs par défaut.
+model NotificationSettings {
+  tenantId              String   @id @map("tenant_id") @db.Uuid
+  quietHoursStart       DateTime @default(dbgenerated("'21:00:00'::time")) @map("quiet_hours_start") @db.Time(0)
+  quietHoursEnd         DateTime @default(dbgenerated("'07:00:00'::time")) @map("quiet_hours_end") @db.Time(0)
+  smsTransliterate      Boolean  @default(true) @map("sms_transliterate")
+  senderDisplayName     String?  @map("sender_display_name") @db.VarChar(30)
+  appointmentSmsEnabled Boolean  @default(true) @map("appointment_sms_enabled")
+  reminderD1Enabled     Boolean  @default(true) @map("reminder_d1_enabled")
+  reminderD1LocalTime   DateTime @default(dbgenerated("'10:00:00'::time")) @map("reminder_d1_local_time") @db.Time(0)
+  reminderH2Enabled     Boolean  @default(true) @map("reminder_h2_enabled")
+  updatedBy             String?  @map("updated_by") @db.Uuid
+  updatedAt             DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@map("notification_settings")
+  @@schema("tenant")
+}
+
+model NotificationPreference {
+  tenantId  String   @map("tenant_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  category  String
+  channel   String
+  enabled   Boolean
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@id([tenantId, userId, category, channel])
+  @@map("notification_preferences")
+  @@schema("tenant")
+}
+
+/// Historique en ajout seul ; le consentement courant est le dernier enregistrement par (patient, canal, finalité).
+model PatientContactConsent {
+  id         String   @default(uuid(7)) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  patientId  String   @map("patient_id") @db.Uuid
+  channel    String
+  purpose    String
+  granted    Boolean
+  source     String
+  recordedBy String?  @map("recorded_by") @db.Uuid
+  recordedAt DateTime @default(now()) @map("recorded_at") @db.Timestamptz(6)
+
+  @@id([tenantId, id])
+  @@index([tenantId, patientId, channel, purpose, recordedAt(sort: Desc), id(sort: Desc)])
+  @@map("patient_contact_consents")
+  @@schema("tenant")
+}
+
+/// Routage d'un STOP entrant : HMAC du numéro × établissement ayant écrit à ce numéro. Rôle ghmt_platform uniquement.
+model SmsRecipientTenant {
+  phoneHmac  Bytes    @map("phone_hmac")
+  tenantId   String   @map("tenant_id") @db.Uuid
+  lastSentAt DateTime @map("last_sent_at") @db.Timestamptz(6)
+
+  @@id([phoneHmac, tenantId])
+  @@map("sms_recipient_tenants")
+  @@schema("platform")
+}

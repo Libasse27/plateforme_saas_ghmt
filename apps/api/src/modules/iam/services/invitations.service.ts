@@ -16,6 +16,7 @@ export interface InvitationRecipient {
   readonly email: string;
   readonly fullName: string;
   readonly tenantName: string;
+  readonly tenantSlug: string;
 }
 
 /** Émission et envoi des invitations (C6) : jeton 256 bits, empreinte SHA-256 en base, TTL 72 h. */
@@ -42,6 +43,7 @@ export class InvitationsService {
       to: recipient.email,
       fullName: recipient.fullName,
       tenantName: recipient.tenantName,
+      tenantSlug: recipient.tenantSlug,
       webUrl: this.env.WEB_URL,
       token: invitation.token,
       ttlHours: INVITATION_TTL_HOURS,

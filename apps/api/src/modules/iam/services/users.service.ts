@@ -91,7 +91,7 @@ export class UsersService {
       });
       await this.audit.record(tx, principal.tenantId, { action: 'iam.user.invited', resourceType: 'user', resourceId: user.id });
       const profile = await loadTenantProfile(tx);
-      return { dto: await this.load(tx, user.id), invitation, recipient: { email: input.email, fullName: input.fullName, tenantName: profile.name } };
+      return { dto: await this.load(tx, user.id), invitation, recipient: { email: input.email, fullName: input.fullName, tenantName: profile.name, tenantSlug: profile.slug } };
     });
     await this.invitations.deliver(created.invitation, created.recipient);
     return created.dto;
@@ -107,7 +107,7 @@ export class UsersService {
       const invitation: IssuedInvitation = await this.invitations.issue(tx, principal.tenantId, id, principal.userId);
       await this.audit.record(tx, principal.tenantId, { action: 'iam.user.invitation_resent', resourceType: 'user', resourceId: id });
       const profile = await loadTenantProfile(tx);
-      return { invitation, recipient: { email: user.email, fullName: user.fullName, tenantName: profile.name } };
+      return { invitation, recipient: { email: user.email, fullName: user.fullName, tenantName: profile.name, tenantSlug: profile.slug } };
     });
     await this.invitations.deliver(prepared.invitation, prepared.recipient);
   }

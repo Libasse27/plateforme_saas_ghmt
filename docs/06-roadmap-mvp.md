@@ -496,3 +496,18 @@ Le lot 1 (corrigé immédiatement) est décrit dans `08-correctifs-revues.md`. L
 | Plateforme | Console plateforme sur sous-domaine distinct + CSP stricte (isolation vis-à-vis d'une XSS de l'espace établissement) ; rôle PostgreSQL d'amorçage dédié au script d'administration | Revue sécurité L2/L3 |
 | Droits du plan | Application des fonctionnalités `customRoles`, `export`, `api` et des limites `activePatients`, `smsMonthly`, `storageGb` | Revue sécurité L4 |
 | Plateforme (agrégats) | Afficher « < 5 » pour les comptes très faibles du tableau de bord | Revue santé |
+
+### Compléments issus de la phase notifications et console d'administration (2026-10-05)
+Hors périmètre de la phase (docs/10 §1.3), renvoyé à la roadmap.
+
+| Domaine | Évolution | Origine |
+|---|---|---|
+| Canaux de notification | Push mobile, Web Push et WebSocket in-app (au MVP : sondage REST du compteur toutes les 60 s) ; disjoncteur et fournisseur SMS de repli ; statut `unknown` faute d'accusé de réception (DLR) sous 24 h ; packs SMS, post-payé, Sender ID personnalisé ; liens courts et jetons patients (aucun lien dans les messages patients) ; jours fériés, digests anti-rafale, métriques Prometheus et alertes | docs/10 §1.3 |
+| Console web des notifications | Écrans des modèles, des paramètres (plages silencieuses, translittération) et du journal d'envoi (l'API est livrée par l'équipe N) | docs/10 §1.3 |
+| Consentement | Saisie du consentement aux rappels côté fiche patient dans toutes les interfaces au-delà du bloc livré par W (l'API est livrée par N) | docs/10 §1.3 |
+| Données de profil | Téléphone des utilisateurs (SMS au personnel, relances SaaS par SMS) ; langue du patient (tous les patients reçoivent du `fr`) | docs/10 §1.3 |
+| Organisation et agenda | Disponibilités et absences des praticiens (US-111) ; horaires, adresse et téléphone des sites ; indicateur « service sensible » (US-071) ; liste des sessions d'un utilisateur | docs/10 §1.3 et §6 |
+| Audit | Vérificateur planifié quotidien et ancrage WORM ; rétention par plan ; vue « qui a consulté ce patient » | docs/10 §1.3 |
+| Notifications des autres modules | Laboratoire, stock, caisse, `auth.*` | docs/10 §1.3 |
+| Droits du plan | Gating du plan sur la surcharge de modèles de notification (Professional et plus) | docs/10 §1.3 |
+- **Consentement des mineurs et des tuteurs** (rappels de rendez-vous) : qui consent, pour quel numéro, et comment le STOP d'un tuteur s'applique à plusieurs patients. Le MVP traite chaque patient séparément ; un changement de numéro réinitialise le consentement SMS (revue santé, 2026-10-05).

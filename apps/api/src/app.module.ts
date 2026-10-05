@@ -20,6 +20,8 @@ import { BillingModule } from './modules/billing/billing.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { PlatformModule } from './modules/platform/platform.module';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
+import { AdminModule } from './modules/admin/admin.module';
 
 import { REDACTED_LOG_PATHS } from './common/logging/redact';
 
@@ -46,6 +48,8 @@ const DEFAULT_RATE_LIMIT = { ttl: 60_000, limit: 300 } as const;
     SubscriptionsModule,
     PaymentsModule,
     BillingModule,
+    NotificationsModule,
+    AdminModule,
   ],
   controllers: [HealthController],
   providers: [

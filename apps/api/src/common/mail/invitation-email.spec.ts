@@ -3,11 +3,17 @@ import { buildInvitationEmail, invitationLink } from './invitation-email';
 import { MemoryMailer } from './memory-mailer';
 
 describe('e-mail d’invitation', () => {
-  const params = { to: 'awa@test.sn', fullName: 'Awa <Diop>', tenantName: 'Clinique "Soleil"', webUrl: 'http://localhost:3001/', token: 'tid.secret', ttlHours: 72 };
+  const params = { to: 'awa@test.sn', fullName: 'Awa <Diop>', tenantName: 'Clinique "Soleil"', tenantSlug: 'clinique-soleil', webUrl: 'http://localhost:3001/', token: 'tid.secret', ttlHours: 72 };
 
   it('construit le lien ${WEB_URL}/invitation/<token> sans double barre oblique', () => {
     expect(invitationLink('http://localhost:3001/', 'tid.secret')).toBe('http://localhost:3001/invitation/tid.secret');
     expect(buildInvitationEmail(params).text).toContain('http://localhost:3001/invitation/tid.secret');
+  });
+
+  it('indique le code établissement à saisir à la connexion (texte et HTML)', () => {
+    const { text, html } = buildInvitationEmail(params);
+    expect(text).toContain('Code établissement à saisir à la connexion : clinique-soleil');
+    expect(html).toContain('<strong>clinique-soleil</strong>');
   });
 
   it('échappe le HTML des données saisies', () => {

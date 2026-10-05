@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { Alert } from '@/components/ui/Alert';
 import { TotpEnrolment } from '@/components/forms/TotpEnrolment';
 import { needsMfaStep } from '@/lib/auth/me';
@@ -16,14 +15,7 @@ export default async function MfaEnrolmentPage() {
       {needsMfaStep(me) ? (
         <Alert tone="warning">L&apos;authentification à deux facteurs est obligatoire pour votre compte. Activez-la pour accéder à la console.</Alert>
       ) : null}
-      {alreadyActive ? (
-        <>
-          <Alert tone="success">L&apos;authentification à deux facteurs est déjà active sur votre compte.</Alert>
-          <Link href="/" className="inline-block font-semibold text-blue-800 underline">Retour au tableau de bord</Link>
-        </>
-      ) : (
-        <TotpEnrolment />
-      )}
+      <TotpEnrolment alreadyActive={alreadyActive} />
     </div>
   );
 }

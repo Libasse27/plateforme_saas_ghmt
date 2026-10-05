@@ -22,6 +22,7 @@ import {
   type PatientRow,
   type PatientSummary,
 } from '../mappers/patient.mapper';
+import { resetSmsConsentOnPhoneChange } from './phone-change-consent';
 import { PatientsRepository, type DuplicateMatches } from '../repositories/patients.repository';
 
 const MIN_SEARCH_LENGTH = 2;
@@ -172,6 +173,9 @@ export class PatientsService {
         updatedBy: userId,
       });
       if (updated === 0) throw this.versionMismatch(current.rowVersion);
+      if (changes.phone !== undefined && !sameBytes(current.phoneBidx, changes.phone === null ? null : this.crypto.blindIndex(tenantId, changes.phone))) {
+        await resetSmsConsentOnPhoneChange(tx, this.audit, { tenantId, patientId: id, actorId: userId, now: this.clock.now() });
+      }
       await this.audit.record(tx, tenantId, {
         action: 'patient.updated',
         resourceType: 'patient',
@@ -337,4 +341,9 @@ export class PatientsService {
     apply(input.address, 'addressEnc');
     return out;
   }
+}
+
+function sameBytes(left: Uint8Array | null, right: Uint8Array | null): boolean {
+  if (left === null || right === null) return left === right;
+  return Buffer.compare(Buffer.from(left), Buffer.from(right)) === 0;
 }

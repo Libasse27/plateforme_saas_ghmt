@@ -27,8 +27,12 @@ describe('formDataToFlat / nestFlat', () => {
     expect(({} as Record<string, unknown>).x).toBeUndefined();
   });
 
-  it('publicValues retire les mots de passe et codes', () => {
-    expect(publicValues({ email: 'a', password: 'p', 'admin.password': 'q', code: '123456', name: 'n' })).toEqual({ email: 'a', name: 'n' });
+  it('publicValues retire les mots de passe', () => {
+    expect(publicValues({ email: 'a', password: 'p', 'admin.password': 'q', confirmPassword: 'r', name: 'n' })).toEqual({ email: 'a', name: 'n' });
+  });
+
+  it('publicValues conserve les codes métier (site, service, caisse, tarif, rôle) pour réafficher le formulaire en erreur', () => {
+    expect(publicValues({ code: 'THIES', name: 'Antenne' })).toEqual({ code: 'THIES', name: 'Antenne' });
   });
 });
 

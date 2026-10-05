@@ -32,6 +32,7 @@ export const ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'patients:patient:read',
       'reports:*:read',
       'audit:log:read',
+      'audit:log:export',
       'audit:alert:*',
       'audit:access_report:read',
     ],

@@ -6,6 +6,8 @@ import type { Me } from '@/lib/auth/me';
 import { Alert } from '@/components/ui/Alert';
 import { buttonClass } from '@/components/ui/styles';
 import type { Banner } from '@/lib/domain/subscription';
+import { NotificationBell } from '@/components/notifications/NotificationBell';
+import type { UnreadCountView } from '@/lib/domain/notifications';
 import { NavLink } from './NavLink';
 
 export interface AppShellProps {
@@ -13,11 +15,15 @@ export interface AppShellProps {
   readonly banner?: Banner | null | undefined;
   /** Administrateurs : lien vers la page d'abonnement. */
   readonly canManageSubscription?: boolean | undefined;
+  /** Compteur de notifications lu côté serveur ; null/absent = cloche sans nombre. */
+  readonly unread?: UnreadCountView | null | undefined;
   readonly children: ReactNode;
 }
 
-export function AppShell({ me, banner, canManageSubscription = false, children }: AppShellProps) {
+export function AppShell({ me, banner, canManageSubscription = false, unread = null, children }: AppShellProps) {
   const items = visibleNav(me);
+  const mainItems = items.filter((item) => item.group === undefined);
+  const adminItems = items.filter((item) => item.group === 'administration');
   return (
     <div className="min-h-screen bg-slate-50 md:flex">
       <a href="#contenu" className="sr-only print:hidden focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-10 focus:bg-white focus:p-2">
@@ -29,9 +35,17 @@ export function AppShell({ me, banner, canManageSubscription = false, children }
           <p className="text-sm text-slate-700">{me.tenant.name}</p>
         </div>
         <nav aria-label="Navigation principale" className="flex gap-1 overflow-x-auto px-2 pb-2 md:flex-col md:overflow-visible">
-          {items.map((item) => (
+          {mainItems.map((item) => (
             <NavLink key={item.href} href={item.href} label={item.label} />
           ))}
+          {adminItems.length > 0 ? (
+            <div role="group" aria-label="Administration" className="flex gap-1 md:mt-2 md:flex-col md:border-t md:border-slate-200 md:pt-2">
+              <p aria-hidden="true" className="hidden px-3 text-xs font-semibold uppercase tracking-wide text-slate-700 md:block">Administration</p>
+              {adminItems.map((item) => (
+                <NavLink key={item.href} href={item.href} label={item.label} exact={item.href === '/administration'} />
+              ))}
+            </div>
+          ) : null}
         </nav>
         <div className="hidden border-t border-slate-200 px-4 py-3 md:block">
           <UserBox me={me} />
@@ -46,6 +60,9 @@ export function AppShell({ me, banner, canManageSubscription = false, children }
             </Alert>
           </div>
         ) : null}
+        <header className="flex items-center justify-end border-b border-slate-300 bg-white px-4 py-1 print:hidden">
+          <NotificationBell initial={unread} />
+        </header>
         <div className="flex items-center justify-between border-b border-slate-300 bg-white px-4 py-2 md:hidden print:hidden">
           <UserBox me={me} />
         </div>

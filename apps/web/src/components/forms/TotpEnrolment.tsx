@@ -15,9 +15,14 @@ export interface TotpEnrolmentProps {
   readonly startSetup?: () => Promise<FormState>;
   readonly activate?: (prev: FormState, formData: FormData) => Promise<FormState>;
   readonly continueHref?: string;
+  /**
+   * Facteur déjà actif côté serveur. Décidé ici et non dans la page : l'activation réécrit le cookie de session,
+   * ce qui rafraîchit la page serveur ; le composant doit rester monté pour afficher les codes de secours.
+   */
+  readonly alreadyActive?: boolean;
 }
 
-export function TotpEnrolment({ startSetup = startTotpSetupAction, activate = activateTotpAction, continueHref = '/' }: TotpEnrolmentProps = {}) {
+export function TotpEnrolment({ startSetup = startTotpSetupAction, activate = activateTotpAction, continueHref = '/', alreadyActive = false }: TotpEnrolmentProps = {}) {
   const [setup, startAction] = useActionState(async () => startSetup(), EMPTY_FORM_STATE);
   const [activation, activateAction] = useActionState(activate, EMPTY_FORM_STATE);
 
@@ -36,6 +41,15 @@ export function TotpEnrolment({ startSetup = startTotpSetupAction, activate = ac
         </ul>
         <Link href={continueHref} className={buttonClass.primary}>J&apos;ai conservé mes codes, continuer</Link>
       </div>
+    );
+  }
+
+  if (alreadyActive) {
+    return (
+      <>
+        <Alert tone="success">L&apos;authentification à deux facteurs est déjà active sur votre compte.</Alert>
+        <Link href={continueHref} className="inline-block font-semibold text-blue-800 underline">Retour au tableau de bord</Link>
+      </>
     );
   }
 

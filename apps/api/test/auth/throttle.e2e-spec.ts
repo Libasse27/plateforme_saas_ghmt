@@ -25,11 +25,13 @@ describe('auth : limitation de débit par IP', () => {
   });
 
   it('limite login à 20 requêtes par 15 minutes et par IP (429 à la 21e)', async () => {
-    const body = { tenantSlug: 'inconnu-xyz', email: 'a@b.test', password: 'x' };
+    // E-mails distincts : le délai progressif (par identifiant) ne doit pas masquer la limite par IP.
+    const attempt = (i: number) => http(app).post(`${AUTH}/login`).send({ tenantSlug: 'inconnu-xyz', email: `a${i}@b.test`, password: 'x' });
     for (let i = 0; i < 20; i += 1) {
-      await http(app).post(`${AUTH}/login`).send(body).expect(401);
+      await attempt(i).expect(401);
     }
 
-    await http(app).post(`${AUTH}/login`).send(body).expect(429);
+    const res = await attempt(20).expect(429);
+    expect(res.body.code).toBe('rate_limited');
   });
 });

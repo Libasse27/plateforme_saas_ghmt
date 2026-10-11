@@ -11,5 +11,9 @@ export const SAMPLE_VALUES: Readonly<Record<string, string>> = {
   'facture.jours_retard': '60',
   'quota.pourcentage': '100',
   'quota.limite': '20000',
+  'utilisateur.nom': 'Marie-Madeleine Ndiaye-Diallo',
+  'role.nom': 'Pharmacien responsable',
+  'portee.type': 'l’établissement',
+  'acteur.nom': 'Abdoulaye Ndiaye-Diallo',
   lien: 'https://app.ghmt.example.com/abonnement/factures',
 };

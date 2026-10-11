@@ -1,3 +1,4 @@
+import { TENANT_STATUS_LABELS } from './platform';
 import { describe, expect, it } from 'vitest';
 import {
   buildManualPaymentInput,
@@ -115,5 +116,11 @@ describe('buildManualPaymentInput', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(Object.keys(result.fieldErrors).sort()).toEqual(['amount', 'method', 'receivedAt', 'reference']);
+  });
+});
+
+describe('statuts d\'établissement', () => {
+  it('libelle « En attente de confirmation » le statut pending (inscription non vérifiée)', () => {
+    expect(TENANT_STATUS_LABELS.pending).toBe('En attente de confirmation');
   });
 });

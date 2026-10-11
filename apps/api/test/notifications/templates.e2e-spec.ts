@@ -46,10 +46,10 @@ describe('modèles de notification', () => {
   const preview = (token: string, body: unknown) => http(app).post(`${URL_BASE}/preview`).set(bearer(token)).send(body as object);
 
   describe('GET /notifications/templates', () => {
-    it('retourne le modèle effectif de chaque type × canal × langue (40 modèles par défaut)', async () => {
+    it('retourne le modèle effectif de chaque type × canal × langue (68 modèles par défaut)', async () => {
       const res = await list(b.adminToken).expect(200);
 
-      expect(res.body.data).toHaveLength(40);
+      expect(res.body.data).toHaveLength(68);
       const confirmed = res.body.data.find((t: { typeCode: string; channel: string; locale: string }) => t.typeCode === 'appointment.confirmed' && t.channel === 'sms' && t.locale === 'fr');
       expect(confirmed).toEqual({
         typeCode: 'appointment.confirmed',

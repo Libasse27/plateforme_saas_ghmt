@@ -1,0 +1,19 @@
+# Contexte de construction des images (racine du dépôt) : aucun secret, aucun artefact local.
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+**/coverage
+**/*.tsbuildinfo
+**/src/generated
+.git
+.github
+# Récursif (docs/11 §14.3.1) : apps/api/.env et apps/web/.env.local ne doivent jamais entrer dans le contexte.
+**/.env
+**/.env.*
+!**/.env.example
+**/.env.local
+**/secrets
+**/*.log
+infra
+docs

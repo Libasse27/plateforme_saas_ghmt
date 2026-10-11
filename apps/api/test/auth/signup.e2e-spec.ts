@@ -3,9 +3,10 @@ import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { FIXTURE_PASSWORD, signupInput } from '../helpers/fixtures';
 import { createTestApp } from '../helpers/test-app';
+import { mailerOf, postVerify, tokenFromMail } from '../onboarding/onboarding-helpers';
 import { AUTH, bearer, http, postLogin } from './auth-helpers';
 
-describe('auth : inscription d’un établissement puis connexion', () => {
+describe('auth : inscription d’un établissement, vérification de l’e-mail puis connexion', () => {
   let app: INestApplication;
   const slug = `signup-${randomBytes(4).toString('hex')}`;
 
@@ -17,10 +18,15 @@ describe('auth : inscription d’un établissement puis connexion', () => {
     await app?.close();
   });
 
-  it('signup crée l’établissement (201, sans connexion automatique) puis login et /me fonctionnent', async () => {
+  it('signup crée l’établissement (201, sans connexion automatique), la confirmation de l’e-mail l’active, puis login et /me fonctionnent', async () => {
     const input = signupInput(slug);
+    mailerOf(app).clear();
 
     const signup = await http(app).post(`${AUTH}/signup`).send(input).expect(201);
+    // Tenant « pending » : aucune session avant la confirmation de l'adresse (le code exact relève de l'équipe AUTH).
+    const early = await postLogin(app, slug, input.admin.email, FIXTURE_PASSWORD);
+    expect(early.status).not.toBe(200);
+    await postVerify(app, tokenFromMail(mailerOf(app).lastTo(input.admin.email))).expect(200);
     const login = await postLogin(app, slug, input.admin.email, FIXTURE_PASSWORD).expect(200);
     const me = await http(app).get(`${AUTH}/me`).set(bearer(login.body.data.accessToken)).expect(200);
 

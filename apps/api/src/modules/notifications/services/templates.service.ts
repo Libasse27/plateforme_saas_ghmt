@@ -24,8 +24,16 @@ import { RecipientsRepository } from '../repositories/recipients.repository';
 import { SettingsRepository } from '../repositories/settings.repository';
 import { TemplatesRepository } from '../repositories/templates.repository';
 import { findDefaultTemplate } from '../templates/default-templates';
+import { isLockedTemplate } from './message-composer';
 
 const notFound = (): DomainError => new DomainError('template_not_found', 404, 'Not Found', 'Modèle introuvable.');
+
+/** Alertes de sécurité : modèles par défaut seuls, jamais personnalisés ni réinitialisés (décision 23, docs/11 §14.1). */
+function assertCustomizable(key: TemplateKeyParts): void {
+  if (isLockedTemplate(key.typeCode)) {
+    throw DomainError.unprocessable('template_locked', 'Les modèles des alertes de sécurité ne sont pas personnalisables.');
+  }
+}
 
 /** Modèles : défauts versionnés en code, surcharges du tenant versionnées en base (docs/10 D12), linter bloquant (§5.4). */
 @Injectable()
@@ -47,7 +55,7 @@ export class TemplatesService {
       const byKey = new Map(customs.map((row) => [`${row.typeCode}/${row.channel}/${row.locale}`, row]));
       return combinationsOf(typeCode).flatMap((key) => {
         const custom = byKey.get(`${key.typeCode}/${key.channel}/${key.locale}`);
-        if (custom) return [customTemplateView(key, custom)];
+        if (custom && !isLockedTemplate(key.typeCode)) return [customTemplateView(key, custom)];
         const fallback = findDefaultTemplate(key.typeCode, key.channel, key.locale);
         return fallback ? [defaultTemplateView(key, fallback)] : [];
       });
@@ -57,6 +65,7 @@ export class TemplatesService {
   upsert(rawType: string, rawChannel: string, rawLocale: string, input: UpsertNotificationTemplateInput): Promise<NotificationTemplateView> {
     const { tenantId, userId } = this.context.requirePrincipal();
     const key = parseKey(rawType, rawChannel, rawLocale);
+    assertCustomizable(key);
     return this.db.run(async (tx) => {
       const issues = await this.lint(tx, tenantId, key, input.subject, input.body);
       if (issues.length > 0) throw rejected(issues);
@@ -69,6 +78,7 @@ export class TemplatesService {
   remove(rawType: string, rawChannel: string, rawLocale: string): Promise<void> {
     const { tenantId } = this.context.requirePrincipal();
     const key = parseKey(rawType, rawChannel, rawLocale);
+    assertCustomizable(key);
     return this.db.run(async (tx) => {
       const active = await this.repo.findActive(tx, tenantId, key);
       if (!active) throw notFound();

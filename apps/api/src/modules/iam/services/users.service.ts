@@ -4,16 +4,18 @@ import { AuditService } from '../../../common/audit/audit.service';
 import { EntitlementService } from '../../../common/authz/entitlement.service';
 import { RequestContext } from '../../../common/context/request-context';
 import { DomainError } from '../../../common/errors/domain-error';
+import { ownerMustTransfer } from './admin-hierarchy';
+import { HierarchyService } from './hierarchy.service';
 import { Page, decodeUuidCursor } from '../../../common/pagination/page';
 import { TenantDb, type TenantTx } from '../../../infrastructure/prisma/tenant-db.service';
 import { loadTenantProfile } from '../../../infrastructure/tenancy/tenant-profile';
-import {
-  ASSIGNMENT_SELECT,
-  USER_SELECT,
-  toUserDetailDto,
-  toUserDto,
-} from '../mappers/iam.mappers';
-import { assertAnotherActiveAdmin, holdsActiveAdminRole } from './admin-invariant';
+import { USER_SELECT, toUserDto } from '../mappers/iam.mappers';
+import { SecurityAlertService } from '../../notifications/services/security-alert.service';
+import { invalidatePasswordResetTokens } from '../../auth/services/password-reset-tokens';
+import { holdsDirectorRole, revokeAllSessions } from './account-security';
+import { UserSecurityService } from './user-security.service';
+import { UserViewsService } from './user-views.service';
+import { assertAnotherActiveAdmin, holdsActiveAdminRole, lockSecuritySettings } from './admin-invariant';
 import { AssignmentsService } from './assignments.service';
 import { InvitationsService, type IssuedInvitation } from './invitations.service';
 
@@ -26,12 +28,16 @@ export class UsersService {
     private readonly assignments: AssignmentsService,
     private readonly invitations: InvitationsService,
     private readonly entitlements: EntitlementService,
+    private readonly hierarchy: HierarchyService,
+    private readonly views: UserViewsService,
+    private readonly userSecurity: UserSecurityService,
+    private readonly alerts: SecurityAlertService,
   ) {}
 
   async list(query: ListUsersQuery): Promise<Page<ReturnType<typeof toUserDto>>> {
     const after = decodeUuidCursor(query.cursor);
-    const rows = await this.tenantDb.run((tx) =>
-      tx.user.findMany({
+    const { rows, map } = await this.tenantDb.run(async (tx) => {
+      const found = await tx.user.findMany({
         where: {
           deletedAt: null,
           ...(query.status ? { status: query.status } : {}),
@@ -43,19 +49,16 @@ export class UsersService {
         select: USER_SELECT,
         orderBy: { id: 'asc' },
         take: query.limit + 1,
-      }),
-    );
-    return Page.fromRows(rows, query.limit, toUserDto, (row) => row.id);
+      });
+      return { rows: found, map: await this.views.mapper(tx, found.slice(0, query.limit)) };
+    });
+    return Page.fromRows(rows, query.limit, map, (row) => row.id);
   }
 
   async get(id: string) {
     return this.tenantDb.run(async (tx) => {
-      const user = await tx.user.findFirst({
-        where: { id, deletedAt: null },
-        select: { ...USER_SELECT, assignments: { where: { revokedAt: null }, select: ASSIGNMENT_SELECT, orderBy: { id: 'asc' } } },
-      });
-      if (!user) throw DomainError.notFound('Utilisateur');
-      return toUserDetailDto(user);
+      await this.requireUser(tx, id);
+      return this.views.detail(tx, id);
     });
   }
 
@@ -103,6 +106,7 @@ export class UsersService {
     const prepared = await this.tenantDb.run(async (tx) => {
       const user = await tx.user.findFirst({ where: { id, deletedAt: null }, select: { id: true, email: true, fullName: true, status: true } });
       if (!user) throw DomainError.notFound('Utilisateur');
+      await this.hierarchy.assertCanManageUser(tx, id);
       if (user.status !== 'invited') throw DomainError.conflict('invalid_state', 'Seul un utilisateur invité peut recevoir une nouvelle invitation.');
       const invitation: IssuedInvitation = await this.invitations.issue(tx, principal.tenantId, id, principal.userId);
       await this.audit.record(tx, principal.tenantId, { action: 'iam.user.invitation_resent', resourceType: 'user', resourceId: id });
@@ -112,26 +116,11 @@ export class UsersService {
     await this.invitations.deliver(prepared.invitation, prepared.recipient);
   }
 
-  /** Remet à zéro le verrouillage de connexion (échecs consécutifs) d'un utilisateur. */
-  async unlock(id: string) {
-    const principal = this.context.requirePrincipal();
-    return this.tenantDb.run(async (tx) => {
-      await this.requireUser(tx, id);
-      const reset = await tx.userCredential.updateMany({ where: { userId: id }, data: { failedAttempts: 0, lockedUntil: null } });
-      await this.audit.record(tx, principal.tenantId, {
-        action: 'iam.user.unlocked',
-        resourceType: 'user',
-        resourceId: id,
-        changes: { credentialReset: reset.count > 0 },
-      });
-      return this.load(tx, id);
-    });
-  }
-
   async update(id: string, input: UpdateUserInput) {
     const principal = this.context.requirePrincipal();
     return this.tenantDb.run(async (tx) => {
       const before = await this.requireUser(tx, id);
+      await this.hierarchy.assertCanManageUser(tx, id);
       const data = {
         ...(input.fullName !== undefined ? { fullName: input.fullName } : {}),
         ...(input.locale !== undefined ? { locale: input.locale } : {}),
@@ -157,31 +146,41 @@ export class UsersService {
   async disable(id: string) {
     const principal = this.context.requirePrincipal();
     return this.tenantDb.run(async (tx) => {
+      // Sérialisé avec un transfert du titre de principal (verrou pris avant de lire le principal).
+      await lockSecuritySettings(tx, principal.tenantId);
       const before = await this.requireUser(tx, id);
+      const { ownerUserId } = await this.hierarchy.assertCanManageUser(tx, id);
       if (before.status === 'disabled') return this.load(tx, id);
+      if (ownerUserId === id) throw ownerMustTransfer();
       if (await holdsActiveAdminRole(tx, id)) {
         await assertAnotherActiveAdmin(tx, principal.tenantId, { excludeUserId: id });
       }
+      const wasDirector = await holdsDirectorRole(tx, id);
       await tx.user.update({
         where: { tenantId_id: { tenantId: principal.tenantId, id } },
         data: { status: 'disabled', updatedBy: principal.userId, rowVersion: { increment: 1 } },
       });
-      const revoked = await this.revokeAllSessions(tx, id, 'user_disabled');
+      const revoked = await revokeAllSessions(tx, id, 'user_disabled');
+      const resetTokens = await invalidatePasswordResetTokens(tx, principal.tenantId, id, new Date());
       await this.audit.record(tx, principal.tenantId, {
         action: 'iam.user.disabled',
         resourceType: 'user',
         resourceId: id,
-        changes: { before: { status: before.status }, after: { status: 'disabled' }, revokedSessions: revoked },
+        changes: { before: { status: before.status }, after: { status: 'disabled' }, revokedSessions: revoked, invalidatedResetTokens: resetTokens },
       });
+      if (wasDirector) {
+        await this.alerts.establishmentAlert(tx, principal.tenantId, 'security.director_removed', { audience: 'directors_and_owner', actorUserId: principal.userId, targetUserId: id }, new Date());
+      }
       return this.load(tx, id);
     });
   }
 
   async enable(id: string) {
     const principal = this.context.requirePrincipal();
-    return this.tenantDb.run(async (tx) => {
+    const outcome = await this.tenantDb.run(async (tx) => {
       const before = await this.requireUser(tx, id);
-      if (before.status === 'active') return this.load(tx, id);
+      await this.hierarchy.assertCanManageUser(tx, id);
+      if (before.status === 'active') return { dto: await this.load(tx, id), delayKey: null };
       if (before.status === 'invited') {
         throw DomainError.conflict('invalid_state', 'Un utilisateur invité doit d’abord accepter son invitation.');
       }
@@ -195,22 +194,26 @@ export class UsersService {
         where: { tenantId_id: { tenantId: principal.tenantId, id } },
         data: { status: nextStatus, updatedBy: principal.userId, rowVersion: { increment: 1 } },
       });
-      await tx.userCredential.updateMany({ where: { userId: id }, data: { failedAttempts: 0, lockedUntil: null } });
+      await tx.userCredential.updateMany({ where: { userId: id }, data: { failedAttempts: 0 } });
       await this.audit.record(tx, principal.tenantId, {
         action: 'iam.user.enabled',
         resourceType: 'user',
         resourceId: id,
         changes: { before: { status: before.status }, after: { status: nextStatus } },
       });
-      return this.load(tx, id);
+      return { dto: await this.load(tx, id), delayKey: await this.userSecurity.loginDelayKey(tx, id) };
     });
+    // Effet hors base APRÈS le commit : une réactivation annulée ne lève pas le délai.
+    await this.userSecurity.clearLoginDelay(outcome.delayKey);
+    return outcome.dto;
   }
 
   async revokeSessions(id: string): Promise<void> {
     const principal = this.context.requirePrincipal();
     await this.tenantDb.run(async (tx) => {
       await this.requireUser(tx, id);
-      const revoked = await this.revokeAllSessions(tx, id, 'revoked_by_admin');
+      await this.hierarchy.assertCanManageUser(tx, id);
+      const revoked = await revokeAllSessions(tx, id, 'revoked_by_admin');
       await this.audit.record(tx, principal.tenantId, {
         action: 'iam.session.revoked',
         resourceType: 'user',
@@ -220,25 +223,14 @@ export class UsersService {
     });
   }
 
-  private async revokeAllSessions(tx: TenantTx, userId: string, reason: string): Promise<number> {
-    const result = await tx.session.updateMany({
-      where: { userId, revokedAt: null },
-      data: { revokedAt: new Date(), revokedReason: reason },
-    });
-    return result.count;
-  }
-
   private async requireUser(tx: TenantTx, id: string): Promise<{ id: string; status: string; locale: string }> {
     const user = await tx.user.findFirst({ where: { id, deletedAt: null }, select: { id: true, status: true, locale: true } });
     if (!user) throw DomainError.notFound('Utilisateur');
     return user;
   }
 
-  private async load(tx: TenantTx, id: string) {
-    const user = await tx.user.findFirstOrThrow({
-      where: { id },
-      select: { ...USER_SELECT, assignments: { where: { revokedAt: null }, select: ASSIGNMENT_SELECT, orderBy: { id: 'asc' } } },
-    });
-    return toUserDetailDto(user);
+  private load(tx: TenantTx, id: string) {
+    return this.views.detail(tx, id);
   }
+
 }

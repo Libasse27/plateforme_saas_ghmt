@@ -1,4 +1,4 @@
-import type { ScopeType } from '@ghmt/shared';
+import { CLINICAL_PERMISSION_MODULES, type ScopeType } from '@ghmt/shared';
 import type { EffectiveGrant } from '../../../common/authz/authorization.types';
 import { DomainError } from '../../../common/errors/domain-error';
 
@@ -53,7 +53,7 @@ export interface AssignmentParties {
  *   en écriture (`iam:*` hors lecture, ex. tenant_admin) restent soumis à l'anti-escalade stricte :
  *   détenir `iam:assignment:create` ne permet pas de fabriquer un administrateur complice.
  */
-function isAdministrativeWrite(permission: string): boolean {
+export function isAdministrativeWrite(permission: string): boolean {
   return permission.startsWith('iam:') && !permission.endsWith(':read');
 }
 
@@ -94,19 +94,18 @@ export function assertNoEscalation(
   }
 }
 
-/** Modules cliniques et financiers dont l'attribution est tracée à part (H2 : détection d'un administrateur complice). */
-const SENSITIVE_ROLE_MODULES: ReadonlySet<string> = new Set([
-  'consultations',
-  'nursing',
-  'maternity',
-  'laboratory',
-  'imaging',
-  'pharmacy',
-  'accounting',
-  'cashier',
-]);
+/**
+ * Modules dont l'attribution est tracée à part (H2 : détection d'un administrateur complice) : tous les modules cliniques
+ * (`CLINICAL_PERMISSION_MODULES`, H5) et les modules financiers.
+ */
+export const SENSITIVE_ROLE_MODULES: ReadonlySet<string> = new Set([...CLINICAL_PERMISSION_MODULES, 'accounting', 'cashier']);
 
-/** Un rôle est « sensible » s'il donne accès à un module clinique ou financier. */
+/** Un export du dossier patient (`patients:*:export`) est sensible, même sans module clinique (H5). */
+function isPatientExport(permission: string): boolean {
+  return permission.startsWith('patients:') && permission.endsWith(':export');
+}
+
+/** Un rôle est « sensible » s'il donne accès à un module clinique ou financier, ou à l'export du dossier patient. */
 export function isSensitiveRole(permissions: readonly string[]): boolean {
-  return permissions.some((permission) => SENSITIVE_ROLE_MODULES.has(permission.split(':')[0] ?? ''));
+  return permissions.some((permission) => SENSITIVE_ROLE_MODULES.has(permission.split(':')[0] ?? '') || isPatientExport(permission));
 }

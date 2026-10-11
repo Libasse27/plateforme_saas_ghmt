@@ -1,4 +1,4 @@
-import type { PermissionKey, ScopeType, SubscriptionStatus } from '@ghmt/shared';
+import type { ClinicalMfaMode, PermissionKey, ScopeType, SubscriptionStatus } from '@ghmt/shared';
 
 /** Permission accordée par une affectation de rôle, avec sa portée (docs/04 §3.4). */
 export interface EffectiveGrant {
@@ -22,7 +22,7 @@ export type DenyReason =
 
 export type AuthorizationDecision =
   | { readonly allowed: true }
-  | { readonly allowed: false; readonly reason: DenyReason; readonly permission?: PermissionKey };
+  | { readonly allowed: false; readonly reason: DenyReason; readonly permission?: PermissionKey; readonly offNetwork?: boolean };
 
 export interface AuthorizationInput {
   readonly required: readonly PermissionKey[];
@@ -30,6 +30,9 @@ export interface AuthorizationInput {
   readonly enabledModules: ReadonlySet<string>;
   readonly tenantStatus: TenantStatus | undefined;
   readonly mfaVerified: boolean;
+  /** L'IP cliente de cette requête appartient-elle à une plage de confiance active (évaluée à chaque requête, docs/11 D4) ? */
+  readonly networkTrusted: boolean;
+  readonly clinicalMfaMode: ClinicalMfaMode;
   /** Statut de l'abonnement du tenant (absent pour un tenant historique sans abonnement : aucune restriction). */
   readonly subscriptionStatus?: SubscriptionStatus | undefined;
   /** Route explicitement autorisée en lecture seule (ex. paiement de l'abonnement) : lève la restriction « suspendu ». */

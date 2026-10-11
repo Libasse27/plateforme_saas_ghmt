@@ -18,6 +18,8 @@ export interface RequestContextState {
   readonly userAgent?: string;
   principal?: Principal;
   grants?: readonly EffectiveGrant[];
+  /** Réseau de confiance de l'établissement, évalué par le guard ; absent si non évalué. */
+  networkTrusted?: boolean;
 }
 
 const storage = new AsyncLocalStorage<RequestContextState>();
@@ -63,6 +65,10 @@ export class RequestContext {
   setGrants(grants: readonly EffectiveGrant[]): void {
     const store = this.requireStore();
     store.grants = Object.freeze([...grants]);
+  }
+
+  setNetworkTrusted(networkTrusted: boolean): void {
+    this.requireStore().networkTrusted = networkTrusted;
   }
 
   private requireStore(): RequestContextState {

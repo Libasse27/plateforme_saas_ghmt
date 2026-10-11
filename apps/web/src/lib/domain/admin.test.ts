@@ -53,6 +53,40 @@ describe('utilisateurs', () => {
     expect(scopeLabel({ scopeType: 'department', scopeId: 'd1' }, sites, departments)).toBe('Service : Pédiatrie');
     expect(scopeLabel({ scopeType: 'site', scopeId: 'zz' }, sites, departments)).toBe('Site : inconnu');
   });
+  it('dernière activité (lastSeenAt) et administrateur principal (isOwner) : lecture tolérante', () => {
+    expect(toUserSummary({ id: 'u1', lastSeenAt: '2026-10-05T08:00:00.000Z', isOwner: true })).toMatchObject({ lastSeenAt: '2026-10-05T08:00:00.000Z', isOwner: true });
+    expect(toUserSummary({ id: 'u1' })).toMatchObject({ lastSeenAt: null, isOwner: false });
+    expect(toUserSummary({ lastSeenAt: 12, isOwner: 'oui' })).toMatchObject({ lastSeenAt: null, isOwner: false });
+    expect(toUserDetail({ lastSeenAt: '2026-10-05T08:00:00.000Z' }).lastSeenAt).toBe('2026-10-05T08:00:00.000Z');
+  });
+  it('mfaEnrolled et loginDelayed : lecture tolérante (absents = inconnus / faux)', () => {
+    expect(toUserSummary({ mfaEnrolled: true, loginDelayed: true })).toMatchObject({ mfaEnrolled: true, loginDelayed: true });
+    expect(toUserSummary({ mfaEnrolled: false })).toMatchObject({ mfaEnrolled: false, loginDelayed: false });
+    expect(toUserSummary({})).toMatchObject({ mfaEnrolled: null, loginDelayed: false });
+    expect(toUserSummary({ mfaEnrolled: 'oui', loginDelayed: 1 })).toMatchObject({ mfaEnrolled: null, loginDelayed: false });
+    expect(toUserDetail({ mfaEnrolled: true }).mfaEnrolled).toBe(true);
+  });
+  it('réinitialisation du second facteur masquée quand aucun facteur n\'est enrôlé (mais proposée si inconnu)', () => {
+    const rights = { update: true, create: true, revokeSessions: true, resetMfa: true };
+    expect(availableUserActions('active', rights, { mfaEnrolled: false })).toEqual(['disable', 'revokeSessions']);
+    expect(availableUserActions('active', rights, { mfaEnrolled: true })).toEqual(['disable', 'revokeSessions', 'resetMfa']);
+    expect(availableUserActions('active', rights, { mfaEnrolled: null })).toEqual(['disable', 'revokeSessions', 'resetMfa']);
+  });
+  it('déverrouillage proposé aussi à un compte actif dont la connexion est ralentie', () => {
+    const rights = { update: true, create: true, revokeSessions: true };
+    expect(availableUserActions('active', rights, { loginDelayed: true })).toEqual(['unlock', 'disable', 'revokeSessions']);
+    expect(availableUserActions('active', rights, { loginDelayed: false })).toEqual(['disable', 'revokeSessions']);
+    expect(availableUserActions('disabled', rights, { loginDelayed: true })).toEqual(['enable']);
+    expect(availableUserActions('active', { ...rights, update: false }, { loginDelayed: true })).toEqual(['revokeSessions']);
+  });
+  it('réinitialisation du second facteur : comptes actifs ou verrouillés, droit de modification et jamais soi-même', () => {
+    const rights = { update: true, create: true, revokeSessions: true, resetMfa: true };
+    expect(availableUserActions('active', rights)).toEqual(['disable', 'revokeSessions', 'resetMfa']);
+    expect(availableUserActions('locked', rights)).toEqual(['unlock', 'disable', 'revokeSessions', 'resetMfa']);
+    expect(availableUserActions('invited', rights)).toEqual(['resend', 'disable']);
+    expect(availableUserActions('disabled', rights)).toEqual(['enable']);
+    expect(availableUserActions('active', { ...rights, resetMfa: false })).toEqual(['disable', 'revokeSessions']);
+  });
   it('actions disponibles selon statut et droits', () => {
     const all = { update: true, create: true, revokeSessions: true };
     expect(availableUserActions('invited', all)).toEqual(['resend', 'disable']);

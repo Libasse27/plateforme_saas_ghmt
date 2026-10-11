@@ -18,12 +18,12 @@ describe('auth : limitation de débit par compte (H1)', () => {
   const loginFrom = (slug: string, email: string) =>
     http(app).post(`${AUTH}/login`).set('X-Forwarded-For', distinctClientIp()).send({ tenantSlug: slug, email, password: 'x' });
 
-  it('limite login par tenantSlug|email même quand chaque requête vient d’une IP différente', async () => {
-    for (let i = 0; i < ACCOUNT_THROTTLE_LIMIT; i += 1) await loginFrom('compte-vise', 'victime@test.sn').expect(401);
+  it('ralentit login par tenantSlug|email même quand chaque requête vient d’une IP différente (délai progressif)', async () => {
+    for (let i = 0; i < 5; i += 1) await loginFrom('compte-vise', 'victime@test.sn').expect(401);
 
-    const blocked = await loginFrom('compte-vise', 'victime@test.sn').expect(429);
+    const delayed = await loginFrom('compte-vise', 'victime@test.sn').expect(429);
 
-    expect(blocked.body.code).toBe('rate_limited');
+    expect(delayed.body.code).toBe('login_delayed');
   });
 
   it('ne pénalise pas un autre compte depuis d’autres adresses', async () => {
@@ -31,10 +31,15 @@ describe('auth : limitation de débit par compte (H1)', () => {
     await loginFrom('autre-etablissement', 'victime@test.sn').expect(401);
   });
 
-  it('normalise la casse et les espaces de l’e-mail (pas de contournement par variantes)', async () => {
-    for (let i = 0; i < ACCOUNT_THROTTLE_LIMIT; i += 1) await loginFrom('compte-casse', 'Cible@Test.sn').expect(401);
+  it('limite mot de passe oublié par tenantSlug|email (3 par 15 minutes) depuis des IP différentes', async () => {
+    const forgot = (email: string) =>
+      http(app).post(`${AUTH}/password/forgot`).set('X-Forwarded-For', distinctClientIp()).send({ tenantSlug: 'compte-oublie', email });
+    for (let i = 0; i < 3; i += 1) await forgot('Cible@Test.sn').expect(202);
 
-    await loginFrom('COMPTE-CASSE', ' cible@test.sn ').expect(429);
+    const blocked = await forgot(' cible@test.sn '.trim().toUpperCase()).expect(429);
+
+    expect(blocked.body.code).toBe('rate_limited');
+    await forgot('autre@test.sn').expect(202);
   });
 
   it('limite mfa/verify par défi, indépendamment de l’IP', async () => {

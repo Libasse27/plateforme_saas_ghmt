@@ -32,6 +32,11 @@ interface ResolvedTemplate {
   readonly body: string;
 }
 
+/** Modèles verrouillés : toujours le modèle par défaut (alertes de sécurité, décision 23). */
+export function isLockedTemplate(typeCode: string): boolean {
+  return typeCode.startsWith('security.');
+}
+
 /**
  * Chaîne de repli de D11 : modèle personnalisé actif de la langue, puis modèle par défaut de la langue, puis français.
  * Rendu strict : une valeur manquante lève `TemplateRenderError` (le message n'est jamais envoyé incomplet).
@@ -56,7 +61,10 @@ export class MessageComposer {
   }
 
   private async resolve(tx: TenantTx, tenantId: string, input: ComposeInput): Promise<ResolvedTemplate> {
-    const custom = await this.templates.findActive(tx, tenantId, { typeCode: input.typeCode, channel: input.channel, locale: input.locale });
+    // Modèles `security.*` non personnalisables (décision 23) : une surcharge antérieure au verrou est ignorée.
+    const custom = isLockedTemplate(input.typeCode)
+      ? null
+      : await this.templates.findActive(tx, tenantId, { typeCode: input.typeCode, channel: input.channel, locale: input.locale });
     if (custom) return { source: 'custom', version: custom.version, subject: custom.subject, body: custom.body };
     const fallback = resolveDefaultTemplate(input.typeCode, input.channel, input.locale);
     if (!fallback) throw new TemplateRenderError(`${input.typeCode}/${input.channel}`);

@@ -17,6 +17,7 @@ import { isUuid } from '@/lib/domain/raw';
 import { formatDateTime } from '@/lib/format/dates';
 import { requireMe } from '@/server/me';
 import { loadOne, loadOptional } from '../../_lib/page-data';
+import { loadOwnerId } from '../owner';
 
 export const metadata: Metadata = { title: 'Utilisateur' };
 
@@ -26,26 +27,35 @@ export default async function UserPage({ params }: { readonly params: Promise<{ 
   const { id } = await params;
   if (!isUuid(id)) notFound();
   const canAssign = hasPermission(me, 'iam:assignment:create');
-  const [loaded, roles, sites, departments] = await Promise.all([
+  const [loaded, roles, sites, departments, ownerId] = await Promise.all([
     loadOne(`/iam/users/${id}`, toUserDetail),
     loadOptional(canAssign && hasPermission(me, 'iam:role:read'), '/iam/roles', toRoleSummary),
     loadOptional(hasPermission(me, 'org:site:read'), '/org/sites', toSiteAdmin),
     loadOptional(hasPermission(me, 'org:service:read'), '/org/departments', toDepartment),
+    loadOwnerId(me),
   ]);
   if (!loaded.ok) return <Alert tone="error">{loaded.message}</Alert>;
   const user = loaded.value;
   const tz = me.tenant.timezone;
+  const isOwner = user.isOwner || (ownerId !== null && ownerId === id);
+  const canUpdateUser = hasPermission(me, 'iam:user:update');
 
   return (
     <>
-      <PageHeader title={user.fullName} description={user.email} actions={<Badge tone={USER_STATUS_TONES[user.status] ?? 'neutral'}>{USER_STATUS_LABELS[user.status] ?? 'Inconnu'}</Badge>} />
+      <PageHeader title={user.fullName} description={user.email} actions={
+        <div className="flex flex-wrap gap-2">
+          {isOwner ? <Badge tone="info">Administrateur principal</Badge> : null}
+          <Badge tone={USER_STATUS_TONES[user.status] ?? 'neutral'}>{USER_STATUS_LABELS[user.status] ?? 'Inconnu'}</Badge>
+        </div>
+      } />
       <div className="space-y-8">
         <p className="text-sm text-slate-800">
           Dernière connexion : {user.lastLoginAt ? formatDateTime(user.lastLoginAt, tz) : 'jamais'}
+          {' · '}Dernière activité : {user.lastSeenAt ? formatDateTime(user.lastSeenAt, tz) : 'jamais'}
           {user.mustChangePassword ? ' · mot de passe à changer à la prochaine connexion' : ''}
         </p>
-        <UserActions userId={id} status={user.status} rights={{ update: hasPermission(me, 'iam:user:update'), create: hasPermission(me, 'iam:user:create'), revokeSessions: hasPermission(me, 'iam:session:delete') }} />
-        {hasPermission(me, 'iam:user:update') ? (
+        <UserActions userId={id} status={user.status} rights={{ update: canUpdateUser, resetMfa: canUpdateUser && id !== me.user.id, create: hasPermission(me, 'iam:user:create'), revokeSessions: hasPermission(me, 'iam:session:delete') }} />
+        {canUpdateUser ? (
           <section aria-labelledby="identite" className="max-w-xl rounded-md border border-slate-300 bg-white p-4">
             <h2 id="identite" className="mb-3 text-lg font-semibold">Identité</h2>
             <ActionForm

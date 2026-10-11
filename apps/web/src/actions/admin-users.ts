@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { updateUserSchema } from '@ghmt/shared';
 import { isApiError } from '@/lib/api/errors';
 import { assignmentForm, inviteForm } from '@/lib/domain/admin-forms';
+import { reasonForm } from '@/lib/domain/security-forms';
 import { rec, str } from '@/lib/domain/raw';
 import { fieldErrorsFromZod, formDataToFlat, publicValues, type FormState } from '@/lib/forms';
 import { actionApi } from '@/server/api';
@@ -49,6 +50,18 @@ function userCommand(suffix: string, method: 'POST' | 'DELETE', message: string)
   };
 }
 
+/** Commande qui exige un motif (docs/11 §14.1) : réinitialisation du second facteur, déverrouillage. */
+function reasonCommand(suffix: string, method: 'POST' | 'DELETE', message: string) {
+  return async (_prev: FormState, formData: FormData): Promise<FormState> => {
+    const flat = formDataToFlat(formData);
+    const id = pathId(flat.userId);
+    if (!id) return INVALID_REQUEST;
+    const valid = checked(reasonForm(flat), publicValues({ reason: flat.reason ?? '' }));
+    if ('state' in valid) return valid.state;
+    return runMutation({ path: `/iam/users/${id}/${suffix}`, method, body: valid.data, values: { reason: valid.data.reason }, revalidate: [USERS_PATH, userPath(id)], message });
+  };
+}
+
 export const resendInvitationAction = async (prev: FormState, formData: FormData): Promise<FormState> =>
   userCommand('invitation', 'POST', 'Invitation renvoyée.')(prev, formData);
 export const disableUserAction = async (prev: FormState, formData: FormData): Promise<FormState> =>
@@ -56,7 +69,9 @@ export const disableUserAction = async (prev: FormState, formData: FormData): Pr
 export const enableUserAction = async (prev: FormState, formData: FormData): Promise<FormState> =>
   userCommand('enable', 'POST', 'Compte réactivé.')(prev, formData);
 export const unlockUserAction = async (prev: FormState, formData: FormData): Promise<FormState> =>
-  userCommand('unlock', 'POST', 'Compte déverrouillé.')(prev, formData);
+  reasonCommand('unlock', 'POST', 'Compte déverrouillé : le délai de connexion est levé.')(prev, formData);
+export const resetUserMfaAction = async (prev: FormState, formData: FormData): Promise<FormState> =>
+  reasonCommand('mfa', 'DELETE', 'Le second facteur est réinitialisé : les sessions ont été coupées et un nouvel enrôlement sera demandé.')(prev, formData);
 export const revokeSessionsAction = async (prev: FormState, formData: FormData): Promise<FormState> =>
   userCommand('sessions', 'DELETE', 'Toutes les sessions de l\'utilisateur ont été révoquées.')(prev, formData);
 

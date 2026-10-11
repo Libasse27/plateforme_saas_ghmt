@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useActionState } from 'react';
-import { activateTotpAction, startTotpSetupAction } from '@/actions/mfa-setup';
+import { activateTotpAction, sendMfaEmailCodeAction, startTotpSetupAction } from '@/actions/mfa-setup';
 import { EMPTY_FORM_STATE, type FormState } from '@/lib/forms';
 import { Alert } from '@/components/ui/Alert';
 import { TextField } from '@/components/ui/Field';
@@ -12,7 +12,9 @@ import { buttonClass } from '@/components/ui/styles';
 
 export interface TotpEnrolmentProps {
   /** Actions du realm (défaut : établissement ; la console plateforme fournit les siennes). */
-  readonly startSetup?: () => Promise<FormState>;
+  readonly startSetup?: (emailCode?: string) => Promise<FormState>;
+  /** Envoi du code par e-mail exigé hors réseau de confiance (docs/11 D7) ; absent de la console plateforme. */
+  readonly sendEmailCode?: () => Promise<FormState>;
   readonly activate?: (prev: FormState, formData: FormData) => Promise<FormState>;
   readonly continueHref?: string;
   /**
@@ -22,8 +24,64 @@ export interface TotpEnrolmentProps {
   readonly alreadyActive?: boolean;
 }
 
-export function TotpEnrolment({ startSetup = startTotpSetupAction, activate = activateTotpAction, continueHref = '/', alreadyActive = false }: TotpEnrolmentProps = {}) {
-  const [setup, startAction] = useActionState(async () => startSetup(), EMPTY_FORM_STATE);
+function emailCodeOf(formData: FormData): string | undefined {
+  const value = formData.get('emailCode');
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
+}
+
+/**
+ * Étape « code par e-mail » : l'API répond 403 `mfa_email_code_required` quand l'enrôlement se fait hors réseau de
+ * confiance. L'utilisateur reçoit un code, le saisit, puis seulement le QR code est affiché.
+ */
+function EmailCodeStep({
+  mail,
+  mailAction,
+  setup,
+  startAction,
+}: {
+  readonly mail: FormState;
+  readonly mailAction: () => void;
+  readonly setup: FormState;
+  readonly startAction: (formData: FormData) => void;
+}) {
+  const codeSent = mail.ok === true || setup.fieldErrors?.emailCode !== undefined;
+  return (
+    <section aria-labelledby="etape-mail" className="space-y-4">
+      <h2 id="etape-mail" className="text-lg font-semibold">1. Confirmez votre adresse e-mail</h2>
+      <p className="text-slate-800">
+        Vous êtes en dehors du réseau de votre établissement : pour activer le second facteur, un code à 6 chiffres est envoyé à l&apos;adresse de votre compte.
+      </p>
+      <form action={mailAction} className="space-y-3">
+        <FormMessage state={mail} />
+        <SubmitButton pendingLabel="Envoi…" variant={codeSent ? 'secondary' : 'primary'}>{codeSent ? 'Renvoyer le code' : 'Recevoir un code par e-mail'}</SubmitButton>
+      </form>
+      {codeSent ? (
+        <form action={startAction} className="space-y-3" noValidate>
+          <TextField
+            name="emailCode"
+            label="Code reçu par e-mail"
+            hint="Code à 6 chiffres, valable 10 minutes."
+            required
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            error={setup.fieldErrors?.emailCode}
+          />
+          <SubmitButton pendingLabel="Vérification…">Valider le code</SubmitButton>
+        </form>
+      ) : null}
+    </section>
+  );
+}
+
+export function TotpEnrolment({
+  startSetup = startTotpSetupAction,
+  sendEmailCode = sendMfaEmailCodeAction,
+  activate = activateTotpAction,
+  continueHref = '/',
+  alreadyActive = false,
+}: TotpEnrolmentProps = {}) {
+  const [setup, startAction] = useActionState(async (_previous: FormState, formData: FormData) => startSetup(emailCodeOf(formData)), EMPTY_FORM_STATE);
+  const [mail, mailAction] = useActionState(async () => sendEmailCode(), EMPTY_FORM_STATE);
   const [activation, activateAction] = useActionState(activate, EMPTY_FORM_STATE);
 
   const backupCodes = (activation.extra?.backupCodes ?? []) as readonly string[];
@@ -56,10 +114,16 @@ export function TotpEnrolment({ startSetup = startTotpSetupAction, activate = ac
   const qrDataUrl = typeof setup.extra?.qrDataUrl === 'string' ? setup.extra.qrDataUrl : null;
   const secret = typeof setup.extra?.secret === 'string' ? setup.extra.secret : null;
 
+  const trustedNetwork = mail.extra?.emailCodeNotRequired === true;
+  const needsEmailCode = setup.extra?.emailCodeRequired === true && !trustedNetwork;
+
   return (
     <div className="space-y-6">
-      {!qrDataUrl ? (
+      {!qrDataUrl && needsEmailCode ? (
+        <EmailCodeStep mail={mail} mailAction={mailAction} setup={setup} startAction={startAction} />
+      ) : !qrDataUrl ? (
         <form action={startAction} className="space-y-3">
+          {trustedNetwork ? <Alert tone="info">Votre réseau est un réseau de confiance : aucun code par e-mail n&apos;est nécessaire.</Alert> : null}
           <FormMessage state={setup} />
           <p className="text-slate-800">
             Vous aurez besoin d&apos;une application d&apos;authentification (Google Authenticator, FreeOTP, Microsoft Authenticator…).

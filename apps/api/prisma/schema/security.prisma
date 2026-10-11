@@ -1,0 +1,70 @@
+// Durcissement sécurité (docs/11-phase-durcissement-securite.md §3.1) : réinitialisation de mot de passe, code e-mail
+// d'enrôlement MFA, réseaux de confiance, politique de sécurité de l'établissement.
+// Aucune relation vers les modèles de core.prisma : les clés étrangères composites (tenant_id, …) sont créées en SQL
+// (migration 20261006000100_auth_hardening), qui porte aussi le RLS, les CHECK et le trigger du principal.
+
+/// Jeton de réinitialisation à usage unique (256 bits, TTL 30 min) : seule l'empreinte SHA-256 est stockée.
+model PasswordResetToken {
+  id          String    @default(uuid(7)) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  tokenHash   Bytes     @map("token_hash")
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  consumedAt  DateTime? @map("consumed_at") @db.Timestamptz(6)
+  /// Essais de second facteur ; le jeton est consommé au 5e échec.
+  attempts    Int       @default(0) @db.SmallInt
+  requestedIp String?   @map("requested_ip") @db.Inet
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([tenantId, id])
+  @@unique([tenantId, tokenHash])
+  @@index([tenantId, expiresAt])
+  @@map("password_reset_tokens")
+  @@schema("tenant")
+}
+
+/// Code à 6 chiffres envoyé par e-mail pour enrôler un TOTP hors réseau de confiance (TTL 10 min, 5 essais, lié à la session).
+model MfaEmailCode {
+  id         String    @default(uuid(7)) @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  sessionId  String    @map("session_id") @db.Uuid
+  /// HMAC-SHA256 (clé dérivée de BLIND_INDEX_KEY, libellé « ghmt:auth:mfa-email-code »).
+  codeHash   Bytes     @map("code_hash")
+  attempts   Int       @default(0) @db.SmallInt
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([tenantId, id])
+  @@map("mfa_email_codes")
+  @@schema("tenant")
+}
+
+/// Plage réseau publique déclarée par l'établissement (docs/11 D4). CHECK de préfixe et de forme réseau en SQL.
+model TrustedNetwork {
+  id        String    @default(uuid(7)) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  network   String    @db.Inet
+  label     String    @db.VarChar(80)
+  siteId    String?   @map("site_id") @db.Uuid
+  createdBy String?   @map("created_by") @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  @@id([tenantId, id])
+  @@map("trusted_networks")
+  @@schema("tenant")
+}
+
+/// Politique de sécurité de l'établissement (une ligne au plus) : administrateur principal et mode MFA des soignants.
+model SecuritySettings {
+  tenantId        String   @id @map("tenant_id") @db.Uuid
+  ownerUserId     String?  @map("owner_user_id") @db.Uuid
+  clinicalMfaMode String   @default("off_network") @map("clinical_mfa_mode")
+  updatedBy       String?  @map("updated_by") @db.Uuid
+  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@map("security_settings")
+  @@schema("tenant")
+}

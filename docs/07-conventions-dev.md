@@ -5,13 +5,17 @@
 
 ## Démarrage local
 ```bash
-pnpm infra:up                         # PostgreSQL 17, Redis, Mailpit (+ MinIO)
+pnpm infra:up                         # PostgreSQL 17, Redis, Mailpit (images épinglées par digest, MinIO retiré)
 cd apps/api && cp .env.example .env   # générer les secrets (voir commentaires)
 pnpm prisma:deploy && node prisma/seed.mts
 pnpm dev                              # http://localhost:3000/api/v1/health
 pnpm test                             # unitaires + intégration (base ghmt_test)
 pnpm vitest run test/<dossier>        # une partie seulement
 ```
+
+> **Images Docker** : chaque `image:` de `infra/docker-compose.yml` est épinglée `nom:version@sha256:<digest>` (`docker buildx imagetools inspect <image>:<tag>` donne le digest). `infra/deploy/check-pinned-images.sh` le vérifie en CI. Déploiement : `apps/api/Dockerfile`, `apps/web/Dockerfile` et `infra/deploy/` (docs/11 §6.5 et §6.6).
+>
+> **IP cliente côté BFF** : `TRUSTED_PROXY_HOPS` (entrée `length − n` de `X-Forwarded-For`, plus de repli `X-Real-IP`) et `EDGE_PROXY_SECRET` (en-tête `X-Ghmt-Edge-Auth` injecté par le proxy, `403` du BFF sans lui en production). Voir `apps/web/.env.example` et `infra/deploy/README.md`.
 
 ## Rôles PostgreSQL
 | Rôle | Usage |

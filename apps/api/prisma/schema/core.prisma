@@ -205,6 +205,8 @@ model User {
   status          UserStatus @default(invited)
   locale          String     @default("fr")
   lastLoginAt     DateTime?  @map("last_login_at") @db.Timestamptz(6)
+  /// Dernière activité (connexion ou rafraîchissement, mise à jour si l'ancienne valeur a plus de 5 min ; docs/11 D15).
+  lastSeenAt      DateTime?  @map("last_seen_at") @db.Timestamptz(6)
   createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
   createdBy       String?    @map("created_by") @db.Uuid
@@ -231,6 +233,7 @@ model UserCredential {
   passwordHash       String    @map("password_hash")
   passwordChangedAt  DateTime  @default(now()) @map("password_changed_at") @db.Timestamptz(6)
   failedAttempts     Int       @default(0) @map("failed_attempts")
+  /// Obsolète depuis la phase durcissement sécurité (docs/11 D3) : le verrou dur est remplacé par un délai progressif ; jamais écrite, remise à NULL par migration.
   lockedUntil        DateTime? @map("locked_until") @db.Timestamptz(6)
   mustChangePassword Boolean   @default(false) @map("must_change_password")
 

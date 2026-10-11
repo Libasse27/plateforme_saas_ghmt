@@ -1,8 +1,11 @@
 import { Body, Controller, HttpCode, Post } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
+  mfaSetupSchema,
   mfaVerifySchema,
   totpActivateSchema,
+  type MfaEmailCodeResponse,
+  type MfaSetupInput,
   type MfaVerifyInput,
   type SessionTokens,
   type TotpActivateResponse,
@@ -12,7 +15,7 @@ import type { Principal } from '../../../common/context/request-context';
 import { AuthenticatedOnly, CurrentPrincipal, Public } from '../../../common/decorators/auth.decorators';
 import { ZodValidationPipe } from '../../../common/pipes/zod-validation.pipe';
 import { AccountThrottled } from '../../../common/throttle/account-throttle';
-import { MFA_ACTIVATE_THROTTLE, MFA_VERIFY_THROTTLE } from '../auth.constants';
+import { MFA_ACTIVATE_THROTTLE, MFA_EMAIL_CODE_THROTTLE, MFA_VERIFY_THROTTLE } from '../auth.constants';
 import { MfaEnrollmentService } from '../services/mfa-enrollment.service';
 import { MfaVerifyService } from '../services/mfa-verify.service';
 
@@ -33,10 +36,21 @@ export class MfaController {
   }
 
   @AuthenticatedOnly()
+  @Throttle(MFA_EMAIL_CODE_THROTTLE)
+  @HttpCode(202)
+  @Post('totp/email-code')
+  emailCode(@CurrentPrincipal() principal: Principal): Promise<MfaEmailCodeResponse> {
+    return this.enrollment.sendEmailCode(principal);
+  }
+
+  @AuthenticatedOnly()
   @HttpCode(200)
   @Post('totp/setup')
-  setup(@CurrentPrincipal() principal: Principal): Promise<TotpSetupResponse> {
-    return this.enrollment.setup(principal);
+  setup(
+    @CurrentPrincipal() principal: Principal,
+    @Body(new ZodValidationPipe(mfaSetupSchema.default({}))) body: MfaSetupInput,
+  ): Promise<TotpSetupResponse> {
+    return this.enrollment.setup(principal, body);
   }
 
   @AuthenticatedOnly()

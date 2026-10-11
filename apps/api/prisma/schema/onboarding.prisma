@@ -1,0 +1,32 @@
+// Équipe OPS (docs/11 §3.2) : inscription vérifiée et slugs réservés.
+// Règle : aucun champ de relation vers les modèles des autres fichiers ; les clés étrangères
+// (tenant.users, platform.tenants) sont créées en SQL dans la migration 20261006000200_signup_hardening.
+
+/// Vérification de l'adresse e-mail de l'administrateur fondateur : jeton à usage unique (256 bits),
+/// seule l'empreinte SHA-256 est stockée.
+/// Index SQL seuls (migration) : ix_signup_verifications_open (tenant_id, user_id) WHERE consumed_at IS NULL et
+/// ix_signup_verifications_expires (tenant_id, expires_at).
+model SignupVerification {
+  id         String    @default(uuid(7)) @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tokenHash  Bytes     @map("token_hash")
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([tenantId, id])
+  @@unique([tenantId, tokenHash])
+  @@map("signup_verifications")
+  @@schema("tenant")
+}
+
+/// Identifiants d'établissement interdits à l'inscription (même contenu que RESERVED_TENANT_SLUGS de @ghmt/shared).
+/// Aucun droit pour ghmt_app : lecture par platform.slug_status et platform.register_tenant (SECURITY DEFINER).
+model ReservedSlug {
+  slug   String @id
+  reason String
+
+  @@map("reserved_slugs")
+  @@schema("platform")
+}

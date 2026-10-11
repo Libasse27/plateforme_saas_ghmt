@@ -1,4 +1,4 @@
-import { type CanActivate, type ExecutionContext, Injectable } from '@nestjs/common';
+import { type CanActivate, type ExecutionContext, HttpStatus, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { PermissionKey } from '@ghmt/shared';
 import { AuditService } from '../audit/audit.service';
@@ -6,7 +6,8 @@ import { AuthorizationService, evaluateAuthorization } from '../authz/authorizat
 import { RequestContext } from '../context/request-context';
 import { IS_AUTHENTICATED_ONLY_KEY, IS_PUBLIC_KEY, PERMISSIONS_KEY } from '../decorators/auth.decorators';
 import { ALLOW_WHEN_SUSPENDED_KEY, PLATFORM_REALM_KEY } from '../decorators/realm.decorators';
-import { DomainError } from '../errors/domain-error';
+import { DomainError, type DomainErrorExtras } from '../errors/domain-error';
+import type { AuthorizationDecision } from '../authz/authorization.types';
 import { TenantDb } from '../../infrastructure/prisma/tenant-db.service';
 
 const DENY_MESSAGES: Record<string, string> = {
@@ -18,6 +19,17 @@ const DENY_MESSAGES: Record<string, string> = {
   mfa_enrollment_required: 'L’authentification à deux facteurs est obligatoire pour votre rôle.',
   password_change_required: 'Vous devez changer votre mot de passe avant de continuer.',
 };
+
+/**
+ * Refus problem+json. `mfa_enrollment_required` porte toujours `offNetwork` (contexte établissement, docs/11 §14.1) : vrai si
+ * le refus vient de la seule règle clinique hors réseau de confiance, faux sinon (rôle `mfaRequired`, mode `always`).
+ */
+export function denial(decision: Extract<AuthorizationDecision, { allowed: false }>): DomainError {
+  const base = { requiredPermission: decision.permission };
+  const extras: DomainErrorExtras & { readonly offNetwork?: boolean } =
+    decision.reason === 'mfa_enrollment_required' ? { ...base, offNetwork: decision.offNetwork ?? false } : base;
+  return new DomainError(decision.reason, HttpStatus.FORBIDDEN, 'Forbidden', DENY_MESSAGES[decision.reason], extras);
+}
 
 /**
  * Guard global n°2 (docs/04 §3.8, docs/03 §1.4 étapes 5-6) : module activé + permission + MFA.
@@ -45,18 +57,21 @@ export class PermissionGuard implements CanActivate {
 
     const allowWhenSuspended = this.reflector.getAllAndOverride<boolean>(ALLOW_WHEN_SUSPENDED_KEY, targets) === true;
     const principal = this.context.requirePrincipal();
-    const { decision, grants } = await this.tenantDb.run(async (tx) => {
+    const { decision, grants, networkTrusted } = await this.tenantDb.run(async (tx) => {
       // Mot de passe à changer : seules les routes @AuthenticatedOnly (dont le changement lui-même) restent accessibles.
       const credential = await tx.userCredential.findUnique({
         where: { tenantId_userId: { tenantId: principal.tenantId, userId: principal.userId } },
         select: { mustChangePassword: true },
       });
-      if (credential?.mustChangePassword) return { decision: { allowed: false, reason: 'password_change_required' } as const, grants: [] };
+      if (credential?.mustChangePassword) {
+        return { decision: { allowed: false, reason: 'password_change_required' } as const, grants: [], networkTrusted: undefined };
+      }
 
-      const [loadedGrants, tenant, subscriptionStatus] = await Promise.all([
+      const [loadedGrants, tenant, subscriptionStatus, network] = await Promise.all([
         this.authz.loadGrants(tx, principal.userId),
         this.authz.loadTenantModules(tx),
         this.authz.loadSubscriptionStatus(tx),
+        this.authz.loadNetworkPolicy(tx, this.context.state?.ip),
       ]);
       const result = evaluateAuthorization({
         required,
@@ -66,21 +81,27 @@ export class PermissionGuard implements CanActivate {
         mfaVerified: principal.mfa,
         subscriptionStatus,
         allowWhenSuspended,
+        networkTrusted: network.networkTrusted,
+        clinicalMfaMode: network.mode,
       });
       if (!result.allowed) {
         await this.audit.record(tx, principal.tenantId, {
           action: 'authz.denied',
           outcome: 'denied',
-          changes: { reason: result.reason, permission: result.permission ?? null, required },
+          changes: {
+            reason: result.reason,
+            permission: result.permission ?? null,
+            required,
+            ...(result.offNetwork !== undefined ? { offNetwork: result.offNetwork } : {}),
+          },
         });
       }
-      return { decision: result, grants: loadedGrants };
+      return { decision: result, grants: loadedGrants, networkTrusted: network.networkTrusted };
     });
 
-    if (!decision.allowed) {
-      throw DomainError.forbidden(decision.reason, DENY_MESSAGES[decision.reason], decision.permission);
-    }
+    if (!decision.allowed) throw denial(decision);
     this.context.setGrants(grants);
+    if (networkTrusted !== undefined) this.context.setNetworkTrusted(networkTrusted);
     return true;
   }
 }

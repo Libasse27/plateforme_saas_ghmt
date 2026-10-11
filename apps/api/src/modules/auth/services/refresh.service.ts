@@ -2,9 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import type { AuthTokens } from '@ghmt/shared';
 import { AuditService } from '../../../common/audit/audit.service';
+import { AuthorizationService } from '../../../common/authz/authorization.service';
 import { DomainError } from '../../../common/errors/domain-error';
+import { Clock } from '../../../common/time/clock';
 import { TenantDb, type TenantTx } from '../../../infrastructure/prisma/tenant-db.service';
 import { parseOpaqueToken } from '../../../common/auth/opaque-token';
+import { SESSION_TENANT_STATUSES } from '../auth.constants';
+import { touchLastSeen } from './last-seen';
 import { evaluateRefresh, type RefreshDecision } from './refresh-policy';
 import { SessionService } from './session.service';
 
@@ -24,6 +28,8 @@ export class RefreshService {
     private readonly tenantDb: TenantDb,
     private readonly sessions: SessionService,
     private readonly audit: AuditService,
+    private readonly authz: AuthorizationService,
+    private readonly clock: Clock,
   ) {}
 
   async refresh(rawToken: string): Promise<AuthTokens> {
@@ -44,7 +50,10 @@ export class RefreshService {
   }
 
   private async rotate(tx: TenantTx, tenantId: string, tokenHash: Uint8Array<ArrayBuffer>): Promise<Outcome> {
-    const now = new Date();
+    const now = this.clock.now();
+    // Établissement résilié ou non confirmé : plus de session ; `suspended` reste ouvert (continuité des soins).
+    const tenantStatus = (await this.authz.loadTenantModules(tx)).status;
+    if (!tenantStatus || !SESSION_TENANT_STATUSES.has(tenantStatus)) return { kind: 'invalid' };
     let current = await this.load(tx, tenantId, tokenHash, now);
     if (!current) return { kind: 'invalid' };
 
@@ -86,6 +95,7 @@ export class RefreshService {
       });
     }
     await tx.session.update({ where: { tenantId_id: { tenantId, id: session.id } }, data: { lastSeenAt: now }, select: { id: true } });
+    await touchLastSeen(tx, tenantId, session.userId, now);
     return { kind: 'ok', userId: session.userId, sessionId: session.id, mfa: session.mfaVerifiedAt !== null, refreshToken: issued.token };
   }
 

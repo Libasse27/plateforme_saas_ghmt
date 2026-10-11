@@ -511,3 +511,14 @@ Hors périmètre de la phase (docs/10 §1.3), renvoyé à la roadmap.
 | Notifications des autres modules | Laboratoire, stock, caisse, `auth.*` | docs/10 §1.3 |
 | Droits du plan | Gating du plan sur la surcharge de modèles de notification (Professional et plus) | docs/10 §1.3 |
 - **Consentement des mineurs et des tuteurs** (rappels de rendez-vous) : qui consent, pour quel numéro, et comment le STOP d'un tuteur s'applique à plusieurs patients. Le MVP traite chaque patient séparément ; un changement de numéro réinitialise le consentement SMS (revue santé, 2026-10-05).
+
+### Compléments issus de la phase durcissement sécurité (2026-10-06)
+La phase `11-phase-durcissement-securite.md` livre, du lot 2 ci-dessus : mot de passe oublié, limiteur sur Redis, délai progressif, MFA hors réseau des rôles cliniques, notification au Directeur, hiérarchie entre administrateurs, purge des jetons, `lastSeenAt`, CSP stricte à nonces, slugs réservés, vérification d'e-mail à l'inscription, images épinglées par digest et `TRUSTED_PROXY_HOPS` avec secret de bordure (topologie de référence dans `infra/deploy/`). Restent à la roadmap (docs/11 §1.3) :
+
+| Domaine | Évolution | Origine |
+|---|---|---|
+| Identitovigilance, droits du patient, bris de glace et ABAC, chiffrement KMS et rotation des clés, audit WORM, gouvernance | Inchangés (lignes du lot 2 ci-dessus) | docs/11 §1.3 |
+| Authentification | WebAuthn ; OTP SMS ; « se souvenir de cet appareil » ; notification de connexion depuis un nouvel appareil ; délai de carence de 24 h après réinitialisation du MFA ; pepper applicatif ; CAPTCHA sur pic d'échecs par tenant ; limitation par utilisateur authentifié et par tenant (docs/04 §9.3) ; délai progressif et Redis pour le realm plateforme ; longueur de mot de passe renforcée pour les rôles privilégiés hors inscription | docs/11 §1.3 |
+| IAM | Transfert de l'administrateur principal par la console plateforme (au MVP : script terminal) ; restriction des réseaux de confiance par site ; revue périodique des affectations ; liste des sessions d'un utilisateur | docs/11 §1.3 |
+| Front | Console plateforme sur sous-domaine distinct ; collecteur interne de rapports CSP ; règle ESLint DOMPurify (aucun `dangerouslySetInnerHTML` aujourd'hui) | docs/11 §1.3 |
+| Déploiement | Kubernetes (Traefik / CloudNativePG / Argo CD, docs/01) ; stockage objet S3 (choix du remplaçant de MinIO au lot « fichiers ») ; Renovate ; signature des images (cosign) ; fuseau par site ; rétention par pays | docs/11 §1.3 |

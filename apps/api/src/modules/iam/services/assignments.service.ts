@@ -5,7 +5,11 @@ import { RequestContext } from '../../../common/context/request-context';
 import { DomainError } from '../../../common/errors/domain-error';
 import { TenantDb, type TenantTx } from '../../../infrastructure/prisma/tenant-db.service';
 import { ASSIGNMENT_SELECT, toAssignmentDto, type AssignmentRow } from '../mappers/iam.mappers';
-import { assertAnotherActiveAdmin } from './admin-invariant';
+import { SecurityAlertService } from '../../notifications/services/security-alert.service';
+import { assertCanGrantRole, ownerMustTransfer } from './admin-hierarchy';
+import { holdsDirectorRole, isDirectorRole } from './account-security';
+import { assertAnotherActiveAdmin, lockSecuritySettings } from './admin-invariant';
+import { HierarchyService } from './hierarchy.service';
 import { TENANT_ADMIN_ROLE } from '../../../infrastructure/tenancy/tenant-provisioning.service';
 import { assertCanAssign, isSensitiveRole, type TargetScope } from './privilege';
 
@@ -15,6 +19,8 @@ export class AssignmentsService {
     private readonly tenantDb: TenantDb,
     private readonly audit: AuditService,
     private readonly context: RequestContext,
+    private readonly hierarchy: HierarchyService,
+    private readonly alerts: SecurityAlertService,
   ) {}
 
   async list(userId: string) {
@@ -33,6 +39,7 @@ export class AssignmentsService {
     const principal = this.context.requirePrincipal();
     return this.tenantDb.run(async (tx) => {
       await this.requireUser(tx, userId);
+      await this.hierarchy.assertCanManageUser(tx, userId);
       const row = await this.createInTx(tx, principal.tenantId, userId, input);
       return toAssignmentDto(row);
     });
@@ -42,6 +49,7 @@ export class AssignmentsService {
     const principal = this.context.requirePrincipal();
     await this.tenantDb.run(async (tx) => {
       await this.requireUser(tx, userId);
+      await this.hierarchy.assertCanManageUser(tx, userId);
       const assignment = await tx.userRoleAssignment.findFirst({
         where: { id: assignmentId, userId, revokedAt: null },
         select: {
@@ -49,10 +57,11 @@ export class AssignmentsService {
           roleId: true,
           scopeType: true,
           scopeId: true,
-          role: { select: { code: true, isSystem: true, permissions: { select: { permissionCode: true } } } },
+          role: { select: { code: true, isSystem: true, templateCode: true, permissions: { select: { permissionCode: true } } } },
         },
       });
       if (!assignment) throw DomainError.notFound('Affectation');
+      const adminRevocation = assignment.role.code === TENANT_ADMIN_ROLE && assignment.scopeType === 'tenant';
 
       const target = await this.resolveScope(tx, assignment.scopeType, assignment.scopeId ?? undefined, false);
       assertCanAssign(
@@ -61,7 +70,11 @@ export class AssignmentsService {
         target,
         { actorUserId: principal.userId, targetUserId: userId, assignmentPermission: 'iam:assignment:delete' },
       );
-      if (assignment.role.code === TENANT_ADMIN_ROLE && assignment.scopeType === 'tenant') {
+      if (adminRevocation) {
+        // Sérialisé avec un transfert du titre (verrou), puis principal relu : il garde son titre tant qu'il ne l'a pas
+        // transféré (docs/11 D9), et la cible d'un transfert en cours ne perd pas son rôle entre-temps.
+        await lockSecuritySettings(tx, principal.tenantId);
+        if ((await this.hierarchy.ownerId(tx)) === userId) throw ownerMustTransfer();
         await assertAnotherActiveAdmin(tx, principal.tenantId, { excludeAssignmentId: assignment.id });
       }
       await tx.userRoleAssignment.update({
@@ -78,14 +91,20 @@ export class AssignmentsService {
           after: { revoked: true },
         },
       });
+      if (isDirectorRole(assignment.role) && !(await holdsDirectorRole(tx, userId))) {
+        // Un directeur qui perd son rôle ne reçoit plus les alertes : les autres directeurs et le principal sont prévenus.
+        await this.alerts.establishmentAlert(tx, principal.tenantId, 'security.director_removed', { audience: 'directors_and_owner', actorUserId: principal.userId, targetUserId: userId }, new Date());
+      }
     });
   }
 
   /** Création dans la transaction de l'appelant (aussi utilisée à la création d'un utilisateur). */
   async createInTx(tx: TenantTx, tenantId: string, userId: string, input: CreateAssignmentInput): Promise<AssignmentRow> {
+    // Verrou partagé du rôle avant de lire ses droits : une modification concurrente (FOR UPDATE) est attendue puis vue.
+    await tx.$queryRaw`SELECT id FROM tenant.roles WHERE id = ${input.roleId}::uuid FOR SHARE`;
     const role = await tx.role.findFirst({
       where: { id: input.roleId, deletedAt: null },
-      select: { id: true, code: true, isSystem: true, permissions: { select: { permissionCode: true } } },
+      select: { id: true, code: true, name: true, isSystem: true, permissions: { select: { permissionCode: true } } },
     });
     if (!role) throw DomainError.unprocessable('role_not_found', 'Le rôle indiqué est introuvable.');
 
@@ -96,6 +115,9 @@ export class AssignmentsService {
       target,
       { actorUserId: this.context.requirePrincipal().userId, targetUserId: userId, assignmentPermission: 'iam:assignment:create' },
     );
+
+    // Accorder un rôle d'administration en écriture (affectation ou invitation) est réservé au principal.
+    assertCanGrantRole(await this.hierarchy.actorRank(tx), role.permissions.map((p) => p.permissionCode));
 
     const validUntil = input.validUntil ? new Date(input.validUntil) : null;
     if (validUntil && validUntil <= new Date()) {
@@ -129,12 +151,19 @@ export class AssignmentsService {
       },
     });
     if (isSensitiveRole(role.permissions.map((p) => p.permissionCode))) {
-      // Détection (risque résiduel H2) : toute affectation d'un rôle clinique ou financier est tracée à part.
+      // Détection (risque résiduel H2) : toute affectation d'un rôle clinique ou financier est tracée à part
+      // et signalée aux directeurs (à défaut à l'administrateur principal) dans la même transaction.
+      const notifiedCount = await this.alerts.sensitiveRoleAssigned(
+        tx,
+        tenantId,
+        { assignmentId: created.id, targetUserId: userId, roleName: role.name, scopeType: input.scopeType, actorUserId: this.context.requirePrincipal().userId },
+        new Date(),
+      );
       await this.audit.record(tx, tenantId, {
         action: 'iam.role.sensitive_assigned',
         resourceType: 'user_role_assignment',
         resourceId: created.id,
-        changes: { userId, roleId: role.id, roleCode: role.code, scopeType: input.scopeType, scopeId: input.scopeId ?? null },
+        changes: { userId, roleId: role.id, roleCode: role.code, scopeType: input.scopeType, scopeId: input.scopeId ?? null, notifiedCount },
       });
     }
     return created;

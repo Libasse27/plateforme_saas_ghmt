@@ -314,7 +314,7 @@ describe('rendez-vous (HTTP)', () => {
       );
 
       expect(res.body.data).toMatchObject({ ...slot(180, 45), rowVersion: 2, status: 'scheduled' });
-      expect(log.changes).toEqual({ fields: ['startsAt', 'endsAt'] });
+      expect(log.changes).toEqual({ fields: ['startsAt', 'endsAt'], offNetwork: true });
     });
 
     it('refuse avec 409 slot_unavailable un déplacement sur un créneau occupé', async () => {
@@ -426,7 +426,7 @@ describe('rendez-vous (HTTP)', () => {
         tx.auditLog.findFirstOrThrow({ where: { action: 'appointment.status_changed', resourceId: created['id'] } }),
       );
 
-      expect(log.changes).toEqual({ from: 'scheduled', to: 'cancelled' });
+      expect(log.changes).toEqual({ from: 'scheduled', to: 'cancelled', offNetwork: true });
     });
 
     it('refuse avec 403 le changement de statut à un rôle sans permission update', async () => {

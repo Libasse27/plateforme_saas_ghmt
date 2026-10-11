@@ -36,6 +36,11 @@ describe('groupe Administration', () => {
     expect(groupOf({ permissions: ['iam:role:read'], modules: [] })).toEqual(['/administration/roles']);
     expect(groupOf({ permissions: ['audit:log:read'], modules: [] })).toEqual(['/administration/journal']);
   });
+  it('Sécurité (réseaux de confiance, MFA, administrateur principal) exige iam:policy:read', () => {
+    expect(groupOf({ permissions: ['iam:user:read', 'iam:role:read'], modules: [] })).not.toContain('/administration/securite');
+    expect(groupOf({ permissions: ['iam:policy:read'], modules: [] })).toEqual(['/administration/securite']);
+    expect(groupOf({ permissions: ['iam:policy:update'], modules: [] })).toEqual([]);
+  });
   it('praticiens : module appointments ET agenda', () => {
     expect(groupOf({ permissions: ['appointments:agenda:read'], modules: [] })).toEqual([]);
     expect(groupOf({ permissions: [], modules: ['appointments'] })).toEqual([]);
@@ -43,7 +48,7 @@ describe('groupe Administration', () => {
   });
   it('un administrateur (motifs génériques) voit tout le groupe dans l\'ordre', () => {
     expect(groupOf({ permissions: ['iam:*:*', 'org:*:*', 'audit:*:*', 'reports:*:*', 'appointments:*:*'], modules: ['appointments'] })).toEqual([
-      '/administration', '/administration/organisation', '/administration/utilisateurs', '/administration/roles', '/administration/praticiens', '/administration/journal',
+      '/administration', '/administration/organisation', '/administration/utilisateurs', '/administration/roles', '/administration/securite', '/administration/praticiens', '/administration/journal',
     ]);
   });
   it('les notifications sont ouvertes à tout utilisateur', () => {

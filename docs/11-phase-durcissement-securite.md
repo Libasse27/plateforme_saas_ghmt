@@ -526,7 +526,7 @@ worker-src 'self'; [prod: upgrade-insecure-requests]; [report-uri …]
 | `/inscription/verifier` (public) | « Consultez votre boîte » + formulaire de renvoi (code établissement, e-mail) | `resendSignupVerificationAction` (`actions/signup-verification.ts`) | `POST /auth/signup/resend` |
 | `/inscription/confirmer/[token]` (public) | Bouton « Confirmer mon adresse » (aucun appel au chargement) ; 410 ⇒ « lien invalide, déjà utilisé ou expiré » ; succès ⇒ `/connexion?etablissement=<slug>&confirme=1` | `verifySignupAction` | `POST /auth/signup/verify` |
 | `/securite/mfa` | `TotpEnrolment` : sur `403 mfa_email_code_required`, étape « Recevoir un code par e-mail » puis saisie du code, puis QR (inchangé) ; `invalid_email_code` sur le champ | `startTotpSetupAction` (`actions/mfa-setup.ts`), `sendMfaEmailCodeAction` | `POST /auth/mfa/totp/email-code`, `POST /auth/mfa/totp/setup` |
-| `/administration/securite` | Politique (`off_network` / `always`, lecture seule sans `iam:policy:update`) ; « Votre adresse actuelle : x (réseau de confiance : oui/non) » + bouton « Ajouter ce réseau (/32) » ; liste et ajout des plages (CIDR, libellé, site facultatif), suppression confirmée ; encadré CGNAT / IP dynamique ; administrateur principal et formulaire de transfert si le lecteur est le principal | `updateSecurityPolicyAction`, `addTrustedNetworkAction`, `removeTrustedNetworkAction`, `transferOwnershipAction` (`actions/admin-security.ts`) | `GET/PUT /iam/security/policy`, `POST/DELETE /iam/security/trusted-networks`, `POST /iam/security/owner` |
+| `/administration/securite` | Politique (`off_network` / `always`, lecture seule sans `iam:policy:update`) ; « Votre adresse actuelle : x (réseau de confiance : oui/non) » + bouton « Ajouter ce réseau (/32) » ; liste et ajout des plages (CIDR, libellé, site facultatif), suppression confirmée ; encadré CGNAT / IP dynamique ; administrateur principal et formulaire de transfert si le lecteur est le principal | `updateSecurityPolicyAction`, `addTrustedNetworkAction`, `removeTrustedNetworkAction`, `transferOwnershipAction` (`actions/admin-security.ts`) | `GET/PATCH /iam/security/policy`, `POST/DELETE /iam/security/trusted-networks`, `POST /iam/security/owner` |
 | `/administration/utilisateurs` · `/[id]` | Colonne et champ « Dernière activité » (`lastSeenAt`, « jamais ») ; badge « Administrateur principal » ; bouton « Réinitialiser le second facteur » (confirmation) ; messages `admin_hierarchy`, `owner_required`, `owner_must_transfer` | `resetUserMfaAction` (`actions/admin-users.ts`) | `DELETE /iam/users/{id}/mfa` |
 | Console plateforme (établissements) | Libellé « En attente de confirmation » pour `pending` | — | — |
 
@@ -614,7 +614,7 @@ Exigences de fin pour chaque équipe :
    - médecin sans TOTP : IP dans une plage ⇒ 200 ; IP hors plage ⇒ 403 `mfa_enrollment_required` ; **même session**, IP qui change ⇒ réévaluation ;
    - aucune plage ⇒ 403 ;
    - mode `always` ⇒ 403 même sur réseau ;
-   - réceptionniste (non clinique) jamais concerné ;
+   - caissier (non clinique) jamais concerné ; le réceptionniste, qui porte `inpatient:admission:*`, est clinique (décision 19 du §13) ;
    - `/auth/me` `mfa.required` cohérent ;
    - audit `authz.denied` avec `offNetwork`.
 8. **Enrôlement hors réseau** :
@@ -734,7 +734,7 @@ Navigateur Chrome, console ouverte :
    - invitation d'un médecin (sans TOTP) ;
    - l'administrateur ajoute « Votre adresse actuelle » (127.0.0.1/32) dans `/administration/securite` ⇒ le médecin accède à l'agenda ;
    - suppression de la plage ⇒ à la navigation suivante, redirection vers `/securite/mfa`, étape « code par e-mail », code reçu dans Mailpit, QR, activation, accès ;
-   - un réceptionniste n'est jamais concerné.
+   - un caissier n'est jamais concerné ; un réceptionniste l'est (admissions, décision 19 du §13).
 6. **Notification au Directeur** : avec un directeur actif, l'affectation du rôle Médecin ⇒ cloche du directeur incrémentée sous 60 s et e-mail dans Mailpit (nom, rôle, « un site » ; aucun nom de service ni donnée patient).
 7. **Hiérarchie** :
    - un second administrateur tente de désactiver le principal ⇒ message « Seul l'administrateur principal… » ;
@@ -773,3 +773,57 @@ Toutes arbitrées par l'utilisateur le 2026-10-05, conformément aux recommandat
 16. CSP en mode `enforce` en dev et en test, `report-only` pour la pré-production, `style-src` à nonces, origines `form-action` configurables ; pas de collecteur interne (`CSP_REPORT_URI` externe facultatif).
 17. Pas de connexion automatique après réinitialisation ; aucun e-mail de réinitialisation pour un compte « invité ».
 18. Phase 0 élargie (variables d'environnement, identifiants du limiteur, throttler `forRootAsync`, bouchon `isFromTrustedEdge`) validée.
+19. (2026-10-06) Le réceptionniste porte `inpatient:admission:read|create` : il est **clinique** au sens de D5 et soumis à la MFA hors réseau. Les scénarios §11 et §12 sont corrigés en conséquence (le rôle non clinique de référence est le caissier).
+20. (2026-10-06) L'expiration d'une inscription non confirmée (D12) **annule aussi l'abonnement d'essai** du tenant, dans la même transaction et avec un audit plateforme : aucune relance SaaS ni facture pour un établissement jamais confirmé.
+21. (2026-10-06) Délai progressif : depuis un réseau de confiance, le délai est **plafonné à 60 s** ; ailleurs, le barème est inchangé. Les refus `login_delayed` sont audités (`auth.login.delayed`, au plus un par compte et par heure), l'administrateur principal et les administrateurs sont prévenus au 10e échec, la fiche utilisateur indique « connexion ralentie ».
+22. (2026-10-06) L'agent administratif (admissions) est clinique ; les permissions de stock pharmacie (`pharmacy:drug:read`, `pharmacy:stock_movement:*`) **ne rendent pas** clinique.
+23. (2026-10-06) Opérations de pouvoir : réseaux de confiance et politique MFA réservés au principal ; modifier un rôle affecté pour lui ajouter une permission d'administration en écriture est réservé au principal ; code TOTP récent exigé pour le transfert, les réseaux et la politique ; motif obligatoire pour la réinitialisation MFA et le déverrouillage ; alertes aux directeurs et au principal ; modèles `security.*` non personnalisables ; plages ≥ /24 (IPv4) et ≥ /48 (IPv6), plages privées et spéciales refusées.
+
+24. (2026-10-10) Panne ou latence de Redis : **repli prudent** du délai progressif. La mémoire par instance reste le repli, mais pendant la panne toute nouvelle tentative sur un identifiant déjà en échec dans cette instance est refusée (`429 login_delayed`) et les admissions de l'instance sont plafonnées. L'état dégradé est exposé dans `/health/ready` et journalisé à l'entrée et à la sortie. Remplace le « repli fermé » du §14.3.6.
+25. (2026-10-10) Blocage ciblé d'un compte (conséquence de D3) : depuis un réseau de confiance de l'établissement, ou une IP déjà utilisée avec succès par ce compte, le délai dû aux échecs venus d'ailleurs ne s'applique pas (compteur secondaire compte + IP). Le compteur par compte seul reste la règle partout ailleurs.
+26. (2026-10-10) `siteId` des réseaux de confiance **retiré** du contrat, du stockage applicatif et de la console : une plage vaut pour tout l'établissement. Le rattachement par site reviendra avec le lot multi-sites.
+
+## 14. Correctifs des revues sécurité et santé (2026-10-06)
+
+Revues du 2026-10-06 sur le travail non commité. Mêmes règles qu'au §0.3 : chaque équipe n'écrit que dans ses fichiers du §10, sauf autorisation explicite ci-dessous. Correctifs de migration dans les plages réservées (AUTH `20261006000110`…, OPS `20261006000210`…).
+
+### 14.1 Contrats modifiés (figés, AUTH ↔ WEB)
+- **Connexion d'un établissement `suspended`** : autorisée (connexion, refresh, mot de passe oublié) ; le guard applique déjà le mode continuité.
+- `GET /iam/security/policy` ajoute `clinicalUsersWithoutMfa: number` (utilisateurs actifs à rôle clinique sans TOTP actif) et `canManage: boolean` (vrai pour le principal seul).
+- `PATCH /iam/security/policy`, `POST /iam/security/trusted-networks`, `DELETE /iam/security/trusted-networks/{id}`, `POST /iam/security/owner` : principal seul (`403 owner_required`) et corps avec `totpCode` (6 chiffres) exigé ⇒ `401 mfa_step_up_required` si absent, `401 mfa_code_invalid` si faux. Pour `DELETE`, `totpCode` est dans le corps JSON.
+- `POST /iam/trusted-networks` : `422 cidr_too_broad` sous /24 (IPv4) ou /48 (IPv6), `422 cidr_reserved` pour RFC 1918, 100.64/10, 127/8, 169.254/16, 0/8, 224/4, ::1, fc00::/7, fe80::/10, ::ffff:0:0/96 hors IPv4 publique, plages de documentation.
+- `DELETE /iam/users/{id}/mfa` et `POST /iam/users/{id}/unlock` : corps `{ reason: string (10..500) }` obligatoire, repris dans `changes.reason`.
+- `GET /iam/users` et `GET /iam/users/{id}` ajoutent `mfaEnrolled: boolean` et `loginDelayed: boolean`.
+- Modification d'un rôle (`PATCH /iam/roles/{id}`, `POST /iam/roles`) qui ajoute une permission d'administration en écriture à un rôle affecté : principal seul (`403 owner_required`).
+- `PUT|PATCH` d'un modèle de notification `security.*` : `422 template_locked`.
+- `403 mfa_enrollment_required` porte `offNetwork: boolean` dans `extra` (contexte établissement).
+- Nouveaux types de notification (e-mail + in-app, exemptés de préférence) : `security.trusted_network_changed`, `security.policy_changed`, `security.mfa_reset`, `security.owner_transferred`, `security.director_removed`, `security.login_delay_alert`.
+
+### 14.2 AUTH
+1. **C1 (santé)** : `suspended` accepté à la connexion, au refresh et au mot de passe oublié, avec un e2e de connexion réelle d'un médecin et d'un administrateur sur un tenant suspendu, puis lecture d'un dossier.
+2. **H2 (sécurité)** : un échec `mfa/verify` alimente le délai progressif ; contrôle du délai en tête de `mfa/verify` et à la création du challenge.
+3. **H3 (sécurité)** : contrôle hiérarchique dans `RolesService.create/update` (§14.1) et `assertCanManage` sur les titulaires du rôle modifié.
+4. Décision 21 : plafond 60 s sur réseau de confiance, audit `auth.login.delayed`, alerte `security.login_delay_alert` aux administrateurs au 10e échec, `loginDelayed` exposé.
+5. Décision 22 : exclusion des permissions de stock pharmacie dans le calcul clinique. **H5 (santé)** : `SENSITIVE_ROLE_MODULES` couvre tous les modules cliniques et `patients:*:export`, avec un test d'inclusion.
+6. Décision 23 : principal seul, code TOTP, motif, alertes (§14.1), modèles `security.*` verrouillés, notification des directeurs quand un directeur est désactivé ou perd son rôle, plages ≥ /24 / ≥ /48 et plages réservées refusées ; `normalizeClientIp` traite les IP privées et spéciales comme absentes.
+7. **M6 (sécurité)** : `/api/v1/health` public réduit à `{ status }` ; détail sur `/api/v1/health/ready`, non routé par le proxy.
+8. **M2 (sécurité)** : `forgot` n'invalide pas un jeton émis il y a moins de 10 min et n'envoie alors aucun nouvel e-mail.
+9. Script `transfer-tenant-owner.mts` : rôle système (`is_system`), TOTP actif exigé (sauf `--allow-without-totp`, journalisé), `--operator` et `--reason` obligatoires (avec utilisateur OS et hôte dans l'audit), option `--grant-admin` (affectation `tenant_admin` auditée quand aucun administrateur n'existe), notification des directeurs.
+10. **M7 (santé)** : la purge des jetons couvre aussi les tenants `terminated`.
+11. Points mineurs : délai progressif sur l'échec du mot de passe actuel (changement de mot de passe) ; vérification et enregistrement de l'échec atomiques (Lua) ; jetons de réinitialisation invalidés au changement de mot de passe et à la désactivation ; clé du limiteur `password_reset` normalisée comme `parseOpaqueToken` ; comptage atomique des envois du code e-mail ; e-mail « tentatives inhabituelles » : « jusqu'à 15 minutes ; votre administrateur peut lever ce délai » ; aucune alerte vers un compte désactivé ; `offNetwork` dans l'audit des lectures cliniques hors réseau.
+
+### 14.3 OPS
+1. **M1 (sécurité)** : `.dockerignore` récursif (`**/.env`, `**/.env.*`, `!**/.env.example`), vérifié dans l'image construite.
+2. `compose.prod.yml` : Redis avec mot de passe (`REDIS_URL` authentifiée), `cap_drop: [ALL]` et `read_only` partout où c'est possible, routeur public de l'API limité à `/api/v1/webhooks` et `/api/v1/health` (le BFF joint l'API en interne), secrets Docker pour les secrets.
+3. **M7 (santé)** : purge des `signup_verifications` des tenants expirés ; anonymisation de l'utilisateur fondateur 30 jours après l'expiration (nom, e-mail remplacés, mot de passe et sessions supprimés), avec un audit plateforme.
+4. **B6 (sécurité)** : e-mail de vérification avec un libellé fixe (sans nom d'établissement ni nom saisi) et limite par adresse de destination.
+5. Runbook : procédure d'astreinte (téléphone perdu la nuit, au moins deux administrateurs avec un TOTP actif), procédure de transfert du principal (demande écrite de la direction, second opérateur, options du script).
+6. Annexe de docs/06 : repli fermé du délai progressif si Redis est indisponible, changement d'e-mail par un administrateur, code d'enrôlement remis en main propre, revue des accès hors réseau.
+
+### 14.4 WEB
+1. **H1 (sécurité)** : `matcher` de `proxy.ts` qui couvre les chemins à jeton (exclusion par liste d'extensions statiques), avec un test qui évalue le `matcher` sur `/reinitialiser/<uuid>.<secret>`.
+2. Textes d'aide : « téléphone perdu ? code de secours ou administrateur » sur `MfaVerifyForm.tsx` (autorisé) et `ResetPasswordForm.tsx` ; « pas d'accès à votre e-mail ? contactez votre administrateur » sur l'étape e-mail de `TotpEnrolment.tsx`.
+3. Console : bannière persistante tant qu'aucun réseau n'est déclaré ; recommandation « au moins deux administrateurs avec un second facteur » ; explication des rôles comptés comme « soignants » ; confirmation avec « N soignants n'ont pas encore de second facteur » avant le mode `always` ou la suppression d'une plage ; formulaires réservés au principal (`canManage`) avec le champ `totpCode`.
+4. Fiche et liste des utilisateurs : `mfaEnrolled` et `loginDelayed` affichés ; « Réinitialiser le second facteur » masqué sans facteur ; champ motif obligatoire et rappel « vérifiez l'identité de la personne en face à face ou par rappel sur un numéro connu » pour la réinitialisation MFA et le déverrouillage.
+5. `mfa_enrollment_required` : message propre à l'établissement (« Vous n'êtes plus sur le réseau de l'établissement : activez le second facteur pour continuer. »), et redirection vers `/securite/mfa` depuis une action serveur, sans perte des valeurs saisies quand c'est possible.
+6. Messages des nouveaux codes : `mfa_step_up_required`, `cidr_reserved`, `template_locked`.

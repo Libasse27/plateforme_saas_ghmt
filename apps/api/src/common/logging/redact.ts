@@ -11,6 +11,7 @@ export const SENSITIVE_HEADERS = [
   'x-ghmt-signature',
   'x-api-key',
   'x-csrf-token',
+  'x-ghmt-edge-auth',
 ] as const;
 
 /** Chemins pino à masquer : en-têtes sensibles de la requête et cookies posés par la réponse. */

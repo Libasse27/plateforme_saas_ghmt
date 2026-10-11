@@ -22,7 +22,7 @@ et gérer leur propre système d'information hospitalier, avec une isolation str
 apps/api         API NestJS (monolithe modulaire, Prisma, PostgreSQL RLS)
 apps/web         Console web établissement (Next.js, BFF à cookies httpOnly)
 packages/shared  Catalogue de permissions, modèles de rôles, schémas Zod
-infra/           docker-compose de développement, rôles PostgreSQL
+infra/           docker-compose de développement, rôles PostgreSQL ; infra/deploy/ : topologie de déploiement de référence (Traefik) et runbook
 docs/            conception
 ```
 
@@ -30,7 +30,7 @@ docs/            conception
 ```bash
 corepack enable pnpm            # ou pnpm installé
 pnpm install
-pnpm infra:up                   # PostgreSQL 17, Redis, MinIO, Mailpit
+pnpm infra:up                   # PostgreSQL 17, Redis, Mailpit (images épinglées par digest ; MinIO retiré, remplaçant choisi au lot « fichiers »)
 cd apps/api && cp .env.example .env   # renseigner les secrets (commandes openssl indiquées)
 pnpm prisma:generate && pnpm prisma:deploy && node prisma/seed.mts
 pnpm dev                        # API : http://localhost:3000/api/v1/health

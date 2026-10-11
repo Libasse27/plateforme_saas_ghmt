@@ -18,12 +18,28 @@ import {
 const UUID = '0197a3c0-0000-7000-8000-000000000001';
 
 describe('catalogue des types de notification', () => {
-  it('expose les 10 types figés avec leurs variables autorisées', () => {
-    expect(NOTIFICATION_TYPE_CODES).toHaveLength(10);
+  it('expose les 17 types figés avec leurs variables autorisées', () => {
+    expect(NOTIFICATION_TYPE_CODES).toHaveLength(17);
     expect(NOTIFICATION_TYPES['appointment.reminder_h2']).toMatchObject({ category: 'clinical_reminder', recipient: 'patient' });
     expect(NOTIFICATION_TYPES['appointment.confirmed'].variables).toEqual(['etablissement.nom', 'site.nom', 'patient.prenom', 'rdv.date', 'rdv.heure']);
     expect(NOTIFICATION_TYPES['subscription.payment_overdue'].channels).toEqual(['email', 'inapp']);
     expect(NOTIFICATION_TYPES['quota.sms_threshold'].variables).toContain('quota.pourcentage');
+  });
+
+  it('déclare les six alertes de sécurité d’établissement (e-mail et in-app, administratives)', () => {
+    for (const code of ['security.trusted_network_changed', 'security.policy_changed', 'security.mfa_reset', 'security.owner_transferred', 'security.director_removed', 'security.login_delay_alert'] as const) {
+      expect(NOTIFICATION_TYPES[code]).toMatchObject({ category: 'administrative', recipient: 'user', channels: ['email', 'inapp'] });
+      expect(NOTIFICATION_TYPES[code].variables).toEqual(['etablissement.nom', 'utilisateur.nom', 'acteur.nom', 'lien']);
+    }
+  });
+
+  it('déclare l’alerte de sécurité d’affectation sensible (docs/11 §5.8)', () => {
+    expect(NOTIFICATION_TYPES['security.sensitive_role_assigned']).toEqual({
+      category: 'administrative',
+      recipient: 'user',
+      channels: ['email', 'inapp'],
+      variables: ['etablissement.nom', 'utilisateur.nom', 'role.nom', 'portee.type', 'acteur.nom', 'lien'],
+    });
   });
 
   it('liste les 11 motifs de suppression du contrat', () => {

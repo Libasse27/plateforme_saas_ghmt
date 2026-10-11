@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import { connection } from 'next/server';
 import type { ReactNode } from 'react';
 import './globals.css';
 
@@ -10,7 +11,12 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = { width: 'device-width', initialScale: 1 };
 
-export default function RootLayout({ children }: { readonly children: ReactNode }) {
+/**
+ * Rendu dynamique obligatoire (docs/11 D14) : le nonce de la CSP est propre à chaque requête, et Next ne peut
+ * l'appliquer qu'au rendu serveur d'une requête réelle (jamais à une page prérendue au build).
+ */
+export default async function RootLayout({ children }: { readonly children: ReactNode }) {
+  await connection();
   return (
     <html lang="fr">
       <body>{children}</body>

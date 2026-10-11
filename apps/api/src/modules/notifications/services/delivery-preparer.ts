@@ -8,7 +8,7 @@ import { loadTenantProfile } from '../../../infrastructure/tenancy/tenant-profil
 import { deliveryDeadline } from '../domain/appointment-plan';
 import { dedupKey } from '../domain/dedup-key';
 import { decideEarly, type DecisionInput, type EarlyOutcome } from '../domain/delivery-decision';
-import { appointmentVariables, invoiceVariables, quotaVariables, type InvoiceContext, type QuotaContext } from '../domain/message-variables';
+import { appointmentVariables, invoiceVariables, quotaVariables, securityLinkPath, securityVariables, type InvoiceContext, type QuotaContext, type SecurityContext } from '../domain/message-variables';
 import { deferForQuietHours } from '../domain/quiet-hours';
 import { isSameLocalDay } from '../domain/zoned-time';
 import { SMS_MAX_SEGMENTS } from '../domain/sms-encoding';
@@ -184,6 +184,9 @@ export class DeliveryPreparer {
       if (!facts.appointment || !facts.patient || !row.subjectVersion) throw new TemplateRenderError('appointment');
       return appointmentVariables({ ...base, siteName: facts.appointment.site.name, patientFirstName: facts.patient.firstName, startsAt: new Date(row.subjectVersion), timeZone: facts.timeZone, locale: localeOf(row) });
     }
+    if (row.typeCode.startsWith('security.')) {
+      return securityVariables(row.context as unknown as SecurityContext, { ...base, webUrl: this.env.WEB_URL, locale: localeOf(row), typeCode: row.typeCode });
+    }
     if (row.typeCode.startsWith('subscription.')) {
       return invoiceVariables(row.context as unknown as InvoiceContext, { ...base, timeZone: facts.timeZone, locale: localeOf(row), now, link });
     }
@@ -193,7 +196,14 @@ export class DeliveryPreparer {
   private async deliverInApp(tx: TenantTx, row: Notification, message: ComposedMessage, now: Date): Promise<null> {
     const isBilling = row.typeCode.startsWith('subscription.') || row.typeCode.startsWith('quota.');
     await this.recorder.markPrepared(tx, row, message, now);
-    await this.recorder.deliverInApp(tx, row, { title: clip(message.subject ?? '', 120), body: clip(message.text, 500), link: isBilling ? INAPP_LINK_SUBSCRIPTION : null }, now);
+    await this.recorder.deliverInApp(tx, row, { title: clip(message.subject ?? '', 120), body: clip(message.text, 500), link: this.inAppLink(row, isBilling) }, now);
+    return null;
+  }
+
+  /** Lien in-app : abonnement pour la facturation, fiche de l'utilisateur concerné pour les alertes de sécurité. */
+  private inAppLink(row: Notification, isBilling: boolean): string | null {
+    if (isBilling) return INAPP_LINK_SUBSCRIPTION;
+    if (row.typeCode.startsWith('security.')) return securityLinkPath(row.typeCode, row.context as unknown as SecurityContext);
     return null;
   }
 

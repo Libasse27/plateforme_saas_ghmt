@@ -97,6 +97,14 @@ export interface UserSummaryView {
   readonly locale: string;
   readonly mustChangePassword: boolean;
   readonly lastLoginAt: string | null;
+  /** Dernière activité (granularité : durée du jeton d'accès, docs/11 D15) ; null = jamais. */
+  readonly lastSeenAt: string | null;
+  /** Administrateur principal de l'établissement (docs/11 D9), si l'API le précise. */
+  readonly isOwner: boolean;
+  /** Second facteur actif ; null tant que l'API ne le précise pas (docs/11 §14.1). */
+  readonly mfaEnrolled: boolean | null;
+  /** Délai progressif de connexion en cours (« connexion ralentie »). */
+  readonly loginDelayed: boolean;
 }
 
 function userStatus(value: unknown): string {
@@ -113,6 +121,10 @@ export function toUserSummary(raw: unknown): UserSummaryView {
     locale: str(data.locale, 'fr'),
     mustChangePassword: bool(data.mustChangePassword),
     lastLoginAt: strOrNull(data.lastLoginAt),
+    lastSeenAt: strOrNull(data.lastSeenAt),
+    isOwner: bool(data.isOwner),
+    mfaEnrolled: typeof data.mfaEnrolled === 'boolean' ? data.mfaEnrolled : null,
+    loginDelayed: bool(data.loginDelayed),
   };
 }
 
@@ -165,20 +177,27 @@ export function scopeLabel(
   return SCOPE_TYPE_LABELS.tenant as string;
 }
 
-export type UserActionKind = 'resend' | 'disable' | 'enable' | 'unlock' | 'revokeSessions';
+export type UserActionKind = 'resend' | 'disable' | 'enable' | 'unlock' | 'revokeSessions' | 'resetMfa';
 
 export interface UserActionRights {
   readonly update: boolean;
   readonly create: boolean;
   readonly revokeSessions: boolean;
+  /** Réinitialisation du second facteur : droit de modification et utilisateur autre que soi-même (absent = non). */
+  readonly resetMfa?: boolean;
 }
 
-/** Boutons proposés selon le statut et les permissions (l'API reste l'arbitre). */
-export function availableUserActions(status: string, rights: UserActionRights): readonly UserActionKind[] {
+export interface UserActionFlags {
+  readonly mfaEnrolled?: boolean | null;
+  readonly loginDelayed?: boolean;
+}
+
+/** Boutons proposés selon le statut, les permissions et l'état du compte (l'API reste l'arbitre). */
+export function availableUserActions(status: string, rights: UserActionRights, flags: UserActionFlags = {}): readonly UserActionKind[] {
   const byStatus: Readonly<Record<string, readonly UserActionKind[]>> = {
     invited: ['resend', 'disable'],
-    active: ['disable', 'revokeSessions'],
-    locked: ['unlock', 'disable', 'revokeSessions'],
+    active: flags.loginDelayed === true ? ['unlock', 'disable', 'revokeSessions', 'resetMfa'] : ['disable', 'revokeSessions', 'resetMfa'],
+    locked: ['unlock', 'disable', 'revokeSessions', 'resetMfa'],
     disabled: ['enable'],
   };
   const allowed: Readonly<Record<UserActionKind, boolean>> = {
@@ -187,6 +206,7 @@ export function availableUserActions(status: string, rights: UserActionRights): 
     enable: rights.update,
     unlock: rights.update,
     revokeSessions: rights.revokeSessions,
+    resetMfa: rights.resetMfa === true && rights.update && flags.mfaEnrolled !== false,
   };
   return (byStatus[status] ?? []).filter((kind) => allowed[kind]);
 }

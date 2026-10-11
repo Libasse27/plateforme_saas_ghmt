@@ -162,10 +162,20 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   return Object.freeze(base);
 }
 
-/** Cohérence du fournisseur SMS : `sandbox` interdit en production, `http` exige URL (https en production) et jeton. */
-function assertSmsConfiguration(env: Pick<ParsedEnv, 'SMS_PROVIDER' | 'SMS_HTTP_URL' | 'SMS_HTTP_TOKEN'>, production: boolean): void {
+/**
+ * Cohérence du fournisseur SMS : `sandbox` (et ses webhooks non signés) interdit en production,
+ * `http` exige URL (https en production) et jeton.
+ */
+function assertSmsConfiguration(
+  env: Pick<ParsedEnv, 'SMS_PROVIDER' | 'SMS_HTTP_URL' | 'SMS_HTTP_TOKEN' | 'SMS_SANDBOX_WEBHOOKS_ENABLED'>,
+  production: boolean,
+): void {
   if (production && env.SMS_PROVIDER === 'sandbox') {
     throw new Error('Configuration invalide : SMS_PROVIDER=sandbox ne peut pas être utilisé en production.');
+  }
+  // Garde explicite, indépendante de SMS_PROVIDER : les routes sandbox ne sont pas signées.
+  if (production && env.SMS_SANDBOX_WEBHOOKS_ENABLED) {
+    throw new Error('Configuration invalide : SMS_SANDBOX_WEBHOOKS_ENABLED ne peut pas être activé en production.');
   }
   if (env.SMS_PROVIDER === 'http') {
     if (!env.SMS_HTTP_URL) throw new Error('Configuration invalide : SMS_HTTP_URL est requis avec SMS_PROVIDER=http.');

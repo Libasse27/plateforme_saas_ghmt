@@ -79,4 +79,15 @@ export class DomainError extends Error {
       retryAfterSeconds,
     });
   }
+
+  /** Délai progressif de connexion (docs/11 D3) : `Retry-After` et `details.retryAfterSeconds` portent la même valeur. */
+  static loginDelayed(retryAfterSeconds: number): DomainError {
+    return new DomainError(
+      'login_delayed',
+      HttpStatus.TOO_MANY_REQUESTS,
+      'Too Many Requests',
+      `Trop de tentatives pour ce compte. Réessayez dans ${retryAfterSeconds} secondes.`,
+      { retryAfterSeconds, details: { retryAfterSeconds } },
+    );
+  }
 }

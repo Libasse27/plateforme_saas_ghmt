@@ -21,6 +21,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { href: '/administration/organisation', label: 'Organisation', group: 'administration', requires: { permission: 'org:site:read' } },
   { href: '/administration/utilisateurs', label: 'Utilisateurs', group: 'administration', requires: { permission: 'iam:user:read' } },
   { href: '/administration/roles', label: 'Rôles et permissions', group: 'administration', requires: { permission: 'iam:role:read' } },
+  { href: '/administration/securite', label: 'Sécurité', group: 'administration', requires: { permission: 'iam:policy:read' } },
   { href: '/administration/praticiens', label: 'Praticiens', group: 'administration', requires: { module: 'appointments', permission: 'appointments:agenda:read' } },
   { href: '/administration/journal', label: 'Journal d\'audit', group: 'administration', requires: { permission: 'audit:log:read' } },
   { href: '/securite/mfa', label: 'Sécurité (MFA)' },

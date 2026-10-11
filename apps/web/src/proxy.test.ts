@@ -1,15 +1,19 @@
 // @vitest-environment node
-import { NextRequest } from 'next/server';
+import { NextRequest, type NextResponse } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetRefreshCache } from '@/lib/api/refresh';
 import { jsonResponse, okEnvelope, problem } from '@/lib/api/test-helpers';
-import { proxy } from './proxy';
+import { isFromTrustedEdge } from '@/lib/edge';
+import { config, proxy } from './proxy';
+
+vi.mock('@/lib/edge', () => ({ isFromTrustedEdge: vi.fn(() => true) }));
 
 function req(path: string, cookie?: string, method = 'GET'): NextRequest {
   return new NextRequest(`http://localhost:3001${path}`, { method, headers: cookie ? { cookie } : {} });
 }
 
 beforeEach(() => {
+  vi.mocked(isFromTrustedEdge).mockReturnValue(true);
   vi.stubEnv('SESSION_COOKIE_SECURE', 'false');
   vi.stubEnv('API_URL', 'http://api.test/api/v1');
 });
@@ -199,3 +203,170 @@ describe('proxy : espace plateforme séparé', () => {
   });
 });
 
+
+const REQUEST_HEADER_PREFIX = 'x-middleware-request-';
+
+function requestHeader(res: NextResponse, name: string): string | null {
+  return res.headers.get(`${REQUEST_HEADER_PREFIX}${name}`);
+}
+
+function nonceOf(policy: string | null): string | undefined {
+  return /'nonce-([^']+)'/.exec(policy ?? '')?.[1];
+}
+
+describe('proxy : nouvelles routes publiques (docs/11 §9.2)', () => {
+  it('laisse passer le mot de passe oublié, la réinitialisation et la vérification d\'inscription sans session', async () => {
+    const paths = ['/mot-de-passe-oublie', '/reinitialiser/abc.def', '/inscription/verifier', '/inscription/confirmer/abc.def'];
+    for (const path of paths) {
+      const res = await proxy(req(path));
+      expect(res.headers.get('location'), path).toBeNull();
+      expect(res.headers.get('x-middleware-next'), path).toBe('1');
+    }
+  });
+
+  it('une page de réinitialisation reste accessible à un utilisateur connecté (aucune redirection vers l\'accueil)', async () => {
+    const res = await proxy(req('/reinitialiser/abc.def', 'ghmt_at=a'));
+    expect(res.headers.get('location')).toBeNull();
+  });
+});
+
+describe('proxy : CSP à nonces (docs/11 D14)', () => {
+  it('pose la CSP sur la réponse et sur l\'en-tête de requête, avec le même nonce et x-nonce', async () => {
+    const res = await proxy(req('/patients', 'ghmt_at=a'));
+    const policy = res.headers.get('content-security-policy');
+    expect(policy).toContain("default-src 'self'");
+    expect(policy).toContain("frame-ancestors 'none'");
+    const nonce = nonceOf(policy);
+    expect(nonce).toMatch(/^[A-Za-z0-9+/]{22}==$/);
+    expect(requestHeader(res, 'content-security-policy')).toBe(policy);
+    expect(requestHeader(res, 'x-nonce')).toBe(nonce);
+  });
+
+  it('génère un nonce différent à chaque requête', async () => {
+    const nonces = new Set<string | undefined>();
+    for (let i = 0; i < 5; i += 1) nonces.add(nonceOf((await proxy(req('/connexion'))).headers.get('content-security-policy')));
+    expect(nonces.size).toBe(5);
+  });
+
+  it('pose la CSP sur les pages publiques', async () => {
+    expect((await proxy(req('/connexion'))).headers.get('content-security-policy')).toContain("'strict-dynamic'");
+  });
+
+  it('pose la CSP sur les redirections (garde de session et utilisateur déjà connecté)', async () => {
+    const toLogin = await proxy(req('/patients'));
+    expect(toLogin.status).toBe(307);
+    expect(toLogin.headers.get('content-security-policy')).toContain("'nonce-");
+    const toHome = await proxy(req('/connexion', 'ghmt_at=a'));
+    expect(toHome.status).toBe(307);
+    expect(toHome.headers.get('content-security-policy')).toContain("'nonce-");
+  });
+
+  it('pose la CSP après un rafraîchissement silencieux, en conservant les cookies renouvelés dans la requête', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => okEnvelope({ accessToken: 'new-a', refreshToken: 'new-r', expiresIn: 900 })));
+    const res = await proxy(req('/patients', 'ghmt_rt=old-r'));
+    expect(res.headers.get('content-security-policy')).toContain("'nonce-");
+    expect(requestHeader(res, 'x-nonce')).toBeTruthy();
+    expect(res.headers.getSetCookie().join('\n')).toContain('ghmt_at=new-a');
+  });
+
+  it('CSP_MODE=report-only : en-tête Report-Only seul, jamais les deux', async () => {
+    vi.stubEnv('CSP_MODE', 'report-only');
+    const res = await proxy(req('/patients', 'ghmt_at=a'));
+    expect(res.headers.get('content-security-policy-report-only')).toContain("default-src 'self'");
+    expect(res.headers.get('content-security-policy')).toBeNull();
+    expect(requestHeader(res, 'content-security-policy-report-only')).toBe(res.headers.get('content-security-policy-report-only'));
+  });
+
+  it('CSP_REPORT_URI : report-uri/report-to et Reporting-Endpoints', async () => {
+    vi.stubEnv('CSP_REPORT_URI', 'https://collect.example.org/csp');
+    const res = await proxy(req('/connexion'));
+    expect(res.headers.get('content-security-policy')).toContain('report-uri https://collect.example.org/csp; report-to csp-endpoint');
+    expect(res.headers.get('reporting-endpoints')).toBe('csp-endpoint="https://collect.example.org/csp"');
+  });
+
+  it('CSP_FORM_ACTION_ORIGINS : origines de form-action (passerelle de paiement)', async () => {
+    vi.stubEnv('CSP_FORM_ACTION_ORIGINS', 'https://pay.cinetpay.test');
+    const policy = (await proxy(req('/abonnement', 'ghmt_at=a'))).headers.get('content-security-policy');
+    expect(policy).toContain("form-action 'self' https://pay.cinetpay.test");
+  });
+
+  it('autorise unsafe-eval uniquement en développement', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    expect((await proxy(req('/connexion'))).headers.get('content-security-policy')).toContain("'unsafe-eval'");
+    vi.stubEnv('NODE_ENV', 'production');
+    expect((await proxy(req('/connexion'))).headers.get('content-security-policy')).not.toContain('unsafe-eval');
+  });
+});
+
+describe('proxy : mise en cache', () => {
+  it('no-store sur les pages non publiques (suite, redirections comprises)', async () => {
+    expect((await proxy(req('/patients', 'ghmt_at=a'))).headers.get('cache-control')).toBe('private, no-store');
+    expect((await proxy(req('/patients'))).headers.get('cache-control')).toBe('private, no-store');
+    expect((await proxy(req('/plateforme/plans', 'ghmt_pat=pa'))).headers.get('cache-control')).toBe('private, no-store');
+  });
+
+  it('no-store aussi sur les pages publiques qui portent un jeton dans l\'URL', async () => {
+    for (const path of ['/reinitialiser/abc.def', '/inscription/confirmer/abc.def', '/invitation/abc.def']) {
+      expect((await proxy(req(path))).headers.get('cache-control'), path).toBe('private, no-store');
+    }
+  });
+});
+
+describe('proxy : garde du proxy de bordure (docs/11 D11)', () => {
+  it('répond 403 en texte brut en production quand la requête ne vient pas du proxy de bordure', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.mocked(isFromTrustedEdge).mockReturnValue(false);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await proxy(req('/patients', 'ghmt_rt=old'));
+    expect(res.status).toBe(403);
+    expect(res.headers.get('content-type')).toMatch(/^text\/plain/);
+    expect(await res.text()).not.toMatch(/secret|EDGE/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuse aussi les pages publiques', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.mocked(isFromTrustedEdge).mockReturnValue(false);
+    expect((await proxy(req('/connexion'))).status).toBe(403);
+  });
+
+  it('hors production, la garde n\'est pas appliquée', async () => {
+    vi.mocked(isFromTrustedEdge).mockReturnValue(false);
+    expect((await proxy(req('/connexion'))).status).toBe(200);
+  });
+
+  it('en production, laisse passer une requête dont l\'en-tête de bordure est valide', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('SESSION_COOKIE_SECURE', 'false');
+    expect((await proxy(req('/connexion'))).status).toBe(200);
+  });
+});
+
+describe('proxy : matcher (revue H1)', () => {
+  // Le matcher est une expression de chemin à un seul groupe ; on l'évalue comme Next le fait (ancrée).
+  const source = config.matcher[0] as string;
+  const matches = (path: string): boolean => new RegExp(`^${source}$`).test(path);
+  const UUID = '0190a3b2-7c11-7a55-9e0f-3a1b2c3d4e5f';
+  const SECRET = 'abcdefghijklmnopqrstuvwxyz0123456789_-ABCDEF';
+
+  it('couvre les chemins à jeton « <uuid>.<secret> », qui contiennent un point', () => {
+    expect(matches(`/reinitialiser/${UUID}.${SECRET}`)).toBe(true);
+    expect(matches(`/inscription/confirmer/${UUID}.${SECRET}`)).toBe(true);
+    expect(matches(`/invitation/${UUID}.${SECRET}`)).toBe(true);
+  });
+
+  it('couvre un jeton dont le secret ressemble à une extension statique', () => {
+    expect(matches(`/reinitialiser/${UUID}.svg-abcdefghijklmnopqrst`)).toBe(true);
+  });
+
+  it('couvre les pages ordinaires', () => {
+    for (const path of ['/', '/connexion', '/patients/abc', '/plateforme/plans', '/administration/securite']) expect(matches(path), path).toBe(true);
+  });
+
+  it('exclut les ressources statiques', () => {
+    for (const path of ['/_next/static/chunks/app.js', '/_next/image', '/favicon.ico', '/logo.svg', '/img/photo.png', '/fonts/a.woff2', '/robots.txt']) {
+      expect(matches(path), path).toBe(false);
+    }
+  });
+});

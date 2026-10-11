@@ -15,7 +15,7 @@ describe('auth : changement de mot de passe et mustChangePassword (C7)', () => {
 
   const change = (token: string, body: Record<string, unknown>) => http(app).post(`${AUTH}/password/change`).set('X-Forwarded-For', distinctClientIp()).set(bearer(token)).send(body);
   const sites = (token: string) => http(app).get('/api/v1/org/sites').set(bearer(token));
-  const newUser = (tenant = a): Promise<UserFixture> => createUserWithRole(app, tenant, 'receptionist');
+  const newUser = (tenant = a): Promise<UserFixture> => createUserWithRole(app, tenant, 'cashier');
   const forceChange = (tenantId: string, userId: string) =>
     tenantDb.runAs(tenantId, (tx) => tx.userCredential.update({ where: { tenantId_userId: { tenantId, userId } }, data: { mustChangePassword: true } }));
 
@@ -97,12 +97,14 @@ describe('auth : changement de mot de passe et mustChangePassword (C7)', () => {
       await postLogin(app, a.slug, user.email).expect(200);
     });
 
-    it('verrouille le compte après des tentatives répétées de deviner le mot de passe actuel', async () => {
+    it('compte les tentatives répétées de deviner le mot de passe actuel, sans verrou dur mais dans le délai progressif (docs/11 §14.2)', async () => {
       const user = await newUser();
 
       for (let i = 0; i < 5; i += 1) await change(user.token, { currentPassword: `Faux-mot-de-passe-${i}`, newPassword: NEW_PASSWORD }).expect(422);
 
-      await postLogin(app, a.slug, user.email).expect(401);
+      const credential = await tenantDb.runAs(a.tenantId, (tx) => tx.userCredential.findUniqueOrThrow({ where: { tenantId_userId: { tenantId: a.tenantId, userId: user.userId } } }));
+      expect(credential).toMatchObject({ failedAttempts: 5, lockedUntil: null });
+      expect((await postLogin(app, a.slug, user.email).expect(429)).body.code).toBe('login_delayed');
     });
 
     it('refuse avec 422 un nouveau mot de passe identique ou trop court', async () => {

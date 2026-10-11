@@ -589,6 +589,31 @@ Une section est `null` si la permission ou le module manque. Chaque section est 
 
 *Permissions* (docs/10 §4) : `settings:notification_log:read` (tenant_admin, director), `settings:notification_template:read|update` (tenant_admin r/u, director r), `patients:consent:read|create` (receptionist, admin_agent, doctor, nurse, midwife), `audit:log:read` (tenant_admin, director), `audit:log:export` (tenant_admin), `reports:dashboard:read` (tenant_admin, director, doctor, accountant). La migration `20261005000500_admin_console` rattrape ces permissions pour les rôles système des établissements existants (idempotente).
 
+#### Phase durcissement sécurité (docs/11) : contrats AUTH et OPS
+
+Format d'erreur `problem+json` enveloppé ; identifiant mal formé ou ressource d'un autre tenant : `404`. Détail complet : `11-phase-durcissement-securite.md` §5 et §6.
+
+*Authentification (AUTH)*
+
+| Méthode | Chemin | Accès | Corps → réponse | Erreurs notables |
+|---|---|---|---|---|
+| POST | `/auth/password/forgot` | public ; IP 10/15 min, identifiant 3/15 min | `{ tenantSlug, email }` → **202** `{ accepted: true }` dans tous les cas (traitement après la réponse) | 422, 429 |
+| POST | `/auth/password/reset/preview` | public ; IP 30/15 min | `{ token }` → 200 `{ tenantSlug, emailMasked, mfaRequired }` | 410 `reset_token_invalid` |
+| POST | `/auth/password/reset` | public ; IP 10/15 min, jeton 6/15 min | `{ token, newPassword, mfaCode? }` → 204 (toutes les sessions révoquées, pas de connexion automatique) | 410 `reset_token_invalid`, 422 `mfa_code_required` (chemin `mfaCode`), 422 `invalid_code` (5 essais puis jeton brûlé), 429 |
+| POST | `/auth/login` | public | inchangé | **429 `login_delayed`** (`Retry-After`, `details.retryAfterSeconds`) ; **403 `email_verification_required`** (établissement `pending`, mot de passe correct) |
+| POST | `/auth/mfa/totp/email-code` | authentifié ; 3/15 min | — → **202** `{ sent: true, emailMasked }` | 409 `mfa_already_enrolled`, 422 `email_code_not_required` (réseau de confiance), 429 |
+| POST | `/auth/mfa/totp/setup` | authentifié | `{ emailCode? }` (facultatif) → 200 `{ otpauthUrl, secret }` | 403 `mfa_email_code_required` (hors réseau sans code), 422 `invalid_email_code`, 409 `mfa_already_enrolled` |
+| GET | `/iam/security/policy` | `iam:policy:read` | → `{ clinicalMfa, trustedNetworks[], requestIp, requestIpTrusted, owner, updatedAt }` | |
+| PUT | `/iam/security/policy` | `iam:policy:update` | `{ clinicalMfa: 'off_network'\|'always' }` → politique | 422 |
+| POST | `/iam/security/trusted-networks` | `iam:policy:update` | `{ cidr, label, siteId? }` → 201 plage | 422 `invalid_cidr`, `cidr_too_broad` (< /16 IPv4, < /32 IPv6), `trusted_network_limit` (50), `scope_not_found` ; 409 `trusted_network_exists` |
+| DELETE | `/iam/security/trusted-networks/{id}` | `iam:policy:update` | 204 | 404 |
+| POST | `/iam/security/owner` | `iam:policy:update` et être le principal | `{ userId }` → politique | 403 `owner_required`, 422 `owner_target_invalid` |
+| DELETE | `/iam/users/{id}/mfa` | `iam:user:update` | 204 (facteur supprimé, sessions révoquées `mfa_reset`, e-mail) | 403 `admin_hierarchy`, 409 `mfa_not_enrolled`, 422 `self_mfa_reset` |
+
+Règles transverses : toute action sur un autre utilisateur de rang ≥ 1 (`PATCH`, `disable`, `enable`, `unlock`, `DELETE …/sessions`, `POST`/`DELETE …/assignments`, `DELETE …/mfa`, `POST …/invitation`) exige un rang strictement supérieur (`403 admin_hierarchy`) ; accorder un rôle d'administration en écriture est réservé au principal (`403 owner_required`) ; le principal ne peut ni se désactiver ni perdre `tenant_admin` (`409 owner_must_transfer`). `GET /iam/users` et `/iam/users/{id}` exposent `lastSeenAt` (et `isOwner`). `GET /health` ajoute `checks.redis` (`up`, `down` ou `disabled`). Un médecin sans second facteur est refusé hors réseau de confiance par `403 mfa_enrollment_required` (audit `authz.denied` avec `offNetwork`) ; `/auth/me` (`mfa.required`) et la réponse de login (`mfaRequired`) reflètent la règle pour l'IP courante.
+
+*Inscription vérifiée (OPS, docs/11 §6)* : `POST /auth/signup` (201 inchangé, établissement `pending`, e-mail de vérification) ; `POST /auth/signup/verify` `{ token }` → 200 `{ tenantSlug }` (410 `verification_token_invalid`, IP 20/15 min) ; `POST /auth/signup/resend` `{ tenantSlug, email }` → 202 `{ accepted: true }` dans tous les cas (IP 5/h, identifiant 3/h) ; `422 slug_reserved` sur `establishment.slug`.
+
 ### 4.1 Auth (`/auth`)
 
 | Méthode | Chemin | Permission | Description |

@@ -4,13 +4,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildPermissionMatrix, toPermissionGroups, type DepartmentView, type SiteAdminView, type UserSummaryView } from '@/lib/domain/admin';
 
 const mocks = vi.hoisted(() => ({
-  disable: vi.fn(), enable: vi.fn(), resend: vi.fn(), unlock: vi.fn(), revoke: vi.fn(), addAssignment: vi.fn(),
+  disable: vi.fn(), enable: vi.fn(), resend: vi.fn(), unlock: vi.fn(), revoke: vi.fn(), addAssignment: vi.fn(), resetMfa: vi.fn(),
   createSite: vi.fn(), createDepartment: vi.fn(), createPractitioner: vi.fn(), updatePractitioner: vi.fn(),
   verify: vi.fn(), createRole: vi.fn(), updateRole: vi.fn(),
 }));
 vi.mock('@/actions/admin-users', () => ({
   disableUserAction: mocks.disable, enableUserAction: mocks.enable, resendInvitationAction: mocks.resend,
-  unlockUserAction: mocks.unlock, revokeSessionsAction: mocks.revoke, addAssignmentAction: mocks.addAssignment,
+  unlockUserAction: mocks.unlock, revokeSessionsAction: mocks.revoke, addAssignmentAction: mocks.addAssignment, resetUserMfaAction: mocks.resetMfa,
 }));
 vi.mock('@/actions/admin-org', () => ({ createSiteAction: mocks.createSite, createDepartmentAction: mocks.createDepartment }));
 vi.mock('@/actions/admin-practitioners', () => ({ createPractitionerAction: mocks.createPractitioner, updatePractitionerAction: mocks.updatePractitioner }));
@@ -55,6 +55,18 @@ describe('UserActions', () => {
     rerender(<UserActions userId={USER} status="disabled" rights={ALL} />);
     expect(screen.getByRole('button', { name: 'Réactiver le compte' })).toBeInTheDocument();
   });
+  it('compte actif : réinitialisation du second facteur en deux temps, avec avertissement', async () => {
+    render(<UserActions userId={USER} status="active" rights={{ ...ALL, resetMfa: true }} />);
+    expect(screen.getByText('Réinitialiser le second facteur')).toBeInTheDocument();
+    expect(screen.getByText(/ses sessions seront coupées et il devra enrôler à nouveau/)).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Confirmer la réinitialisation' }));
+    await waitFor(() => expect(mocks.resetMfa).toHaveBeenCalled());
+    expect((mocks.resetMfa.mock.calls[0]?.[1] as FormData).get('userId')).toBe(USER);
+  });
+  it('réinitialisation du second facteur absente sans le droit (ou sur soi-même)', () => {
+    render(<UserActions userId={USER} status="active" rights={ALL} />);
+    expect(screen.queryByText('Réinitialiser le second facteur')).not.toBeInTheDocument();
+  });
   it('sans permission : aucune action rendue', () => {
     const { container } = render(<UserActions userId={USER} status="active" rights={{ update: false, create: false, revokeSessions: false }} />);
     expect(container).toBeEmptyDOMElement();
@@ -91,15 +103,32 @@ describe('AssignmentForm', () => {
   });
 });
 
-const user = (overrides: Partial<UserSummaryView> = {}): UserSummaryView => ({ id: USER, email: 'awa@clinique.sn', fullName: 'Awa Diop', status: 'active', locale: 'fr', mustChangePassword: false, lastLoginAt: null, ...overrides });
+const user = (overrides: Partial<UserSummaryView> = {}): UserSummaryView => ({ id: USER, email: 'awa@clinique.sn', fullName: 'Awa Diop', status: 'active', locale: 'fr', mustChangePassword: false, lastLoginAt: null, lastSeenAt: null, isOwner: false, mfaEnrolled: null, loginDelayed: false, ...overrides });
 
 describe('UsersTable', () => {
   it('liste les utilisateurs avec un lien vers la fiche, sans donnée patient', () => {
     render(<UsersTable users={[user(), user({ id: 'u2', fullName: 'Ibou Fall', status: 'locked', lastLoginAt: '2026-10-05T10:00:00.000Z' })]} timeZone="Africa/Dakar" />);
     expect(screen.getByRole('link', { name: 'Awa Diop' })).toHaveAttribute('href', `/administration/utilisateurs/${USER}`);
     expect(screen.getByText('Verrouillé')).toBeInTheDocument();
-    expect(screen.getByText('Jamais')).toBeInTheDocument();
+    // Première ligne : ni connexion ni activité (deux « Jamais »). Seconde ligne : connexion datée, activité jamais.
+    expect(screen.getAllByText('Jamais')).toHaveLength(3);
     expect(screen.getByText('05/10/2026 10:00')).toBeInTheDocument();
+  });
+  it('colonne « Dernière activité » : date ou « Jamais », distincte de la dernière connexion', () => {
+    render(<UsersTable users={[user({ lastLoginAt: '2026-10-01T08:00:00.000Z', lastSeenAt: '2026-10-05T10:15:00.000Z' }), user({ id: 'u2', fullName: 'Ibou Fall' })]} timeZone="Africa/Dakar" />);
+    expect(screen.getByRole('columnheader', { name: 'Dernière activité' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Dernière connexion' })).toBeInTheDocument();
+    expect(screen.getByText('05/10/2026 10:15')).toBeInTheDocument();
+    expect(screen.getByText('01/10/2026 08:00')).toBeInTheDocument();
+    expect(screen.getAllByText('Jamais')).toHaveLength(2);
+  });
+  it('badge « Administrateur principal » pour le principal (champ de l\'API ou identifiant connu)', () => {
+    const { rerender } = render(<UsersTable users={[user({ isOwner: true })]} timeZone="Africa/Dakar" />);
+    expect(screen.getByText('Administrateur principal')).toBeInTheDocument();
+    rerender(<UsersTable users={[user(), user({ id: 'u2', fullName: 'Ibou Fall' })]} ownerId="u2" timeZone="Africa/Dakar" />);
+    const badges = screen.getAllByText('Administrateur principal');
+    expect(badges).toHaveLength(1);
+    expect(badges[0]?.closest('tr')).toHaveTextContent('Ibou Fall');
   });
   it('état vide', () => {
     render(<UsersTable users={[]} timeZone="Africa/Dakar" />);

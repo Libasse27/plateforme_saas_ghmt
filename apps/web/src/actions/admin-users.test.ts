@@ -13,6 +13,7 @@ import {
   inviteUserAction,
   resendInvitationAction,
   revokeAssignmentAction,
+  resetUserMfaAction,
   revokeSessionsAction,
   unlockUserAction,
   updateUserAction,
@@ -89,7 +90,6 @@ describe('commandes sur un utilisateur', () => {
     [resendInvitationAction, 'invitation', 'POST', 'Invitation renvoyée'],
     [disableUserAction, 'disable', 'POST', 'désactivé'],
     [enableUserAction, 'enable', 'POST', 'réactivé'],
-    [unlockUserAction, 'unlock', 'POST', 'déverrouillé'],
     [revokeSessionsAction, 'sessions', 'DELETE', 'sessions'],
   ] as const)('%s appelle /iam/users/{id}/%s', async (action, suffix, method, fragment) => {
     const { calls } = stubApi(() => new Response(null, { status: 204 }));
@@ -99,6 +99,54 @@ describe('commandes sur un utilisateur', () => {
     const call = calls.find((c) => c.path === `/iam/users/${USER}/${suffix}`);
     expect(call?.method).toBe(method);
     expect(revalidatePath).toHaveBeenCalledWith(`/administration/utilisateurs/${USER}`);
+  });
+  it('resetUserMfaAction : DELETE /iam/users/{id}/mfa avec le motif, sessions coupées', async () => {
+    const { calls } = stubApi(() => new Response(null, { status: 204 }));
+    const state = await resetUserMfaAction({}, form({ userId: USER, reason: 'Téléphone perdu, identité vérifiée en face à face.' }));
+    expect(state).toMatchObject({ ok: true });
+    expect(state.message).toContain('second facteur');
+    const call = calls.find((c) => c.path === `/iam/users/${USER}/mfa`);
+    expect(call?.method).toBe('DELETE');
+    expect(call?.body).toEqual({ reason: 'Téléphone perdu, identité vérifiée en face à face.' });
+    expect(revalidatePath).toHaveBeenCalledWith(`/administration/utilisateurs/${USER}`);
+  });
+  it.each([
+    [403, 'admin_hierarchy', 'Seul l\'administrateur principal peut agir sur un autre administrateur.'],
+    [403, 'owner_required', 'Seul l\'administrateur principal peut accorder'],
+    [409, 'owner_must_transfer', 'transférer'],
+    [409, 'mfa_not_enrolled', 'aucun second facteur'],
+    [422, 'self_mfa_reset', 'votre propre'],
+  ])('codes de hiérarchie : %i %s', async (status, code, fragment) => {
+    stubApi(() => problem(status, code));
+    const reason = 'Identité vérifiée par rappel sur un numéro connu.';
+    for (const action of [resetUserMfaAction, disableUserAction, unlockUserAction, revokeSessionsAction, enableUserAction]) {
+      expect((await action({}, form({ userId: USER, reason }))).message).toContain(fragment);
+    }
+  });
+  it('unlockUserAction : POST /iam/users/{id}/unlock avec le motif, qui efface aussi le délai', async () => {
+    const { calls } = stubApi(() => new Response(null, { status: 204 }));
+    const state = await unlockUserAction({}, form({ userId: USER, reason: 'Collègue joint par téléphone, mot de passe oublié.' }));
+    expect(state).toMatchObject({ ok: true });
+    expect(state.message).toContain('déverrouillé');
+    const call = calls.find((c) => c.path === `/iam/users/${USER}/unlock`);
+    expect(call?.method).toBe('POST');
+    expect(call?.body).toEqual({ reason: 'Collègue joint par téléphone, mot de passe oublié.' });
+  });
+  it.each([
+    ['réinitialisation du second facteur', resetUserMfaAction],
+    ['déverrouillage', unlockUserAction],
+  ] as const)('%s : motif obligatoire (10 à 500 caractères), aucun appel sans lui', async (_name, action) => {
+    const { calls } = stubApi(() => undefined);
+    for (const reason of [undefined, '', 'court', 'a'.repeat(501)]) {
+      const state = await action({}, form(reason === undefined ? { userId: USER } : { userId: USER, reason }));
+      expect(state.ok).toBe(false);
+      expect(state.fieldErrors?.reason).toMatch(/10 à 500/);
+    }
+    expect(calls).toHaveLength(0);
+  });
+  it('un motif refusé par l\'API (422 reason_required) est dit clairement', async () => {
+    stubApi(() => problem(422, 'reason_required'));
+    expect((await resetUserMfaAction({}, form({ userId: USER, reason: 'Motif suffisamment long.' }))).message).toContain('motif');
   });
   it('409 dernier administrateur et 403', async () => {
     stubApi(() => problem(409, 'last_admin'));

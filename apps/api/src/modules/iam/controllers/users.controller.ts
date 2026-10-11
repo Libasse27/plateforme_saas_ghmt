@@ -3,16 +3,19 @@ import {
   createAssignmentSchema,
   createUserSchema,
   listUsersQuerySchema,
+  reasonSchema,
   updateUserSchema,
   type CreateAssignmentInput,
   type CreateUserInput,
   type ListUsersQuery,
+  type ReasonInput,
   type UpdateUserInput,
 } from '@ghmt/shared';
 import { RequirePermission } from '../../../common/decorators/auth.decorators';
 import { UuidPipe } from '../../../common/pipes/uuid.pipe';
 import { ZodValidationPipe } from '../../../common/pipes/zod-validation.pipe';
 import { AssignmentsService } from '../services/assignments.service';
+import { UserSecurityService } from '../services/user-security.service';
 import { UsersService } from '../services/users.service';
 
 @Controller('iam/users')
@@ -20,6 +23,7 @@ export class UsersController {
   constructor(
     private readonly users: UsersService,
     private readonly assignments: AssignmentsService,
+    private readonly userSecurity: UserSecurityService,
   ) {}
 
   @Get()
@@ -67,11 +71,19 @@ export class UsersController {
     return this.users.resendInvitation(id);
   }
 
+  /** Motif obligatoire (docs/11 §14.1), repris dans l'audit. */
   @Post(':id/unlock')
   @HttpCode(200)
   @RequirePermission('iam:user:update')
-  unlock(@Param('id', UuidPipe) id: string) {
-    return this.users.unlock(id);
+  unlock(@Param('id', UuidPipe) id: string, @Body(new ZodValidationPipe(reasonSchema)) body: ReasonInput) {
+    return this.userSecurity.unlock(id, body.reason);
+  }
+
+  @Delete(':id/mfa')
+  @HttpCode(204)
+  @RequirePermission('iam:user:update')
+  resetMfa(@Param('id', UuidPipe) id: string, @Body(new ZodValidationPipe(reasonSchema)) body: ReasonInput): Promise<void> {
+    return this.userSecurity.resetMfa(id, body.reason);
   }
 
   @Delete(':id/sessions')

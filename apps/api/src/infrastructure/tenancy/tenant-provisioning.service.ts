@@ -17,6 +17,16 @@ export interface ProvisionedTenant {
   readonly mainSiteId: string;
 }
 
+/** Statut initial du tenant : `pending` jusqu'à la confirmation de l'e-mail de l'administrateur (docs/11 D12). */
+export type InitialTenantStatus = 'active' | 'pending';
+
+export interface ProvisionOptions {
+  /** Défaut `active` : les fixtures de test et les créations internes restent inchangées. */
+  readonly initialStatus?: InitialTenantStatus;
+  /** Exécuté dans la transaction de provisionnement (contexte tenant posé), avant la validation : tout ou rien. */
+  readonly afterProvision?: (tx: TenantTx, provisioned: ProvisionedTenant) => Promise<void>;
+}
+
 /**
  * Création atomique d'un établissement (docs/05 A11) : tenant + modules (fonction SECURITY DEFINER),
  * site principal, rôles système clonés depuis les modèles, administrateur et son affectation,
@@ -34,15 +44,17 @@ export class TenantProvisioningService {
     input: SignupTenantInput,
     adminPasswordHash: string,
     optionalModules: readonly string[] = DEFAULT_OPTIONAL_MODULES,
+    options: ProvisionOptions = {},
   ): Promise<ProvisionedTenant> {
     const { establishment: e } = input;
+    const initialStatus = options.initialStatus ?? 'active';
     return this.tenantDb.runWithoutTenant(async (tx) => {
       const [registered] = await tx.$queryRaw<{ id: string }[]>`
         SELECT platform.register_tenant(
           ${e.slug}, ${e.legalName}, ${e.tradeName ?? null},
           ${e.establishmentType}::platform.establishment_type,
           ${e.countryCode}::char(2), ${e.baseCurrency}::char(3), ${e.timezone},
-          ${[...optionalModules]}::text[]
+          ${[...optionalModules]}::text[], ${initialStatus}::platform.tenant_status
         )::text AS id`;
       const tenantId = registered!.id;
       await applyTenantContext(tx, tenantId);
@@ -75,9 +87,11 @@ export class TenantProvisioningService {
         actorUserId: admin.id,
         resourceType: 'tenant',
         resourceId: tenantId,
-        changes: { slug: e.slug, establishmentType: e.establishmentType, modules: [...optionalModules], trialPlan },
+        changes: { slug: e.slug, establishmentType: e.establishmentType, modules: [...optionalModules], trialPlan, initialStatus },
       });
-      return { tenantId, adminUserId: admin.id, mainSiteId: site.id };
+      const provisioned: ProvisionedTenant = { tenantId, adminUserId: admin.id, mainSiteId: site.id };
+      await options.afterProvision?.(tx, provisioned);
+      return provisioned;
     });
   }
 

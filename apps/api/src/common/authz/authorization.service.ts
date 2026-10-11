@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { isPermissionKey, moduleOf, type PermissionKey, type SubscriptionStatus } from '@ghmt/shared';
+import { CLINICAL_MFA_MODES, isPermissionKey, moduleOf, type ClinicalMfaMode, type PermissionKey, type SubscriptionStatus } from '@ghmt/shared';
+import { normalizeClientIp } from './client-ip';
+import { mfaRequiredFor, clinicalMfaRequired } from './clinical-mfa';
 import type { TenantTx } from '../../infrastructure/prisma/tenant-db.service';
 import type {
   AuthorizationDecision,
@@ -46,7 +48,7 @@ function isBlockedInGrace(permission: PermissionKey): boolean {
 }
 
 export function evaluateAuthorization(input: AuthorizationInput): AuthorizationDecision {
-  const { required, grants, enabledModules, tenantStatus, mfaVerified, subscriptionStatus, allowWhenSuspended } = input;
+  const { required, grants, enabledModules, tenantStatus, mfaVerified, subscriptionStatus, allowWhenSuspended, networkTrusted, clinicalMfaMode } = input;
   if (tenantStatus !== 'active' && tenantStatus !== 'suspended') return { allowed: false, reason: 'tenant_inactive' };
 
   for (const permission of required) {
@@ -58,8 +60,12 @@ export function evaluateAuthorization(input: AuthorizationInput): AuthorizationD
     if (!grants.some((g) => g.permission === permission)) return { allowed: false, reason: 'permission_denied', permission };
   }
 
-  const mfaRequired = grants.some((g) => g.mfaRequired);
-  if (mfaRequired && !mfaVerified) return { allowed: false, reason: 'mfa_enrollment_required' };
+  const mfaContext = { grants, mode: clinicalMfaMode, networkTrusted };
+  if (mfaRequiredFor(mfaContext) && !mfaVerified) {
+    // `offNetwork` : le refus ne vient que de la règle clinique (aucun rôle `mfaRequired`), tracé dans l'audit `authz.denied`.
+    const clinicalOnly = !grants.some((g) => g.mfaRequired) && clinicalMfaRequired(mfaContext);
+    return clinicalOnly ? { allowed: false, reason: 'mfa_enrollment_required', offNetwork: !networkTrusted } : { allowed: false, reason: 'mfa_enrollment_required' };
+  }
   return { allowed: true };
 }
 
@@ -79,8 +85,33 @@ export function scopesFor(
   };
 }
 
+/** Politique réseau du tenant courant pour une requête : mode MFA des soignants et appartenance de l'IP à une plage de confiance. */
+export interface NetworkPolicy {
+  readonly mode: ClinicalMfaMode;
+  readonly networkTrusted: boolean;
+}
+
+const DEFAULT_NETWORK_POLICY: NetworkPolicy = { mode: 'off_network', networkTrusted: false };
+
 @Injectable()
 export class AuthorizationService {
+  /**
+   * Mode MFA clinique et réseau de confiance, en UNE requête (docs/11 §5.4). Évalué à chaque requête : une session ouverte
+   * sur le réseau de l'établissement puis utilisée ailleurs est réévaluée. IP absente ou invalide ⇒ hors réseau de confiance.
+   */
+  async loadNetworkPolicy(tx: TenantTx, rawIp: string | null | undefined): Promise<NetworkPolicy> {
+    const ip = normalizeClientIp(rawIp);
+    const rows = await tx.$queryRaw<{ mode: string | null; trusted: boolean }[]>`
+      SELECT
+        (SELECT clinical_mfa_mode FROM tenant.security_settings LIMIT 1) AS mode,
+        (${ip}::text IS NOT NULL AND EXISTS (
+          SELECT 1 FROM tenant.trusted_networks WHERE deleted_at IS NULL AND ${ip}::text::inet <<= network)) AS trusted`;
+    const row = rows[0];
+    if (!row) return DEFAULT_NETWORK_POLICY;
+    const mode = (CLINICAL_MFA_MODES as readonly (string | null)[]).includes(row.mode) ? (row.mode as ClinicalMfaMode) : 'off_network';
+    return { mode, networkTrusted: row.trusted === true };
+  }
+
   /** Permissions effectives : affectations valides (non révoquées, dans leur fenêtre) × permissions du rôle. */
   async loadGrants(tx: TenantTx, userId: string, now: Date = new Date()): Promise<EffectiveGrant[]> {
     const assignments = await tx.userRoleAssignment.findMany({

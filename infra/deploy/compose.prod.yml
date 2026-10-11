@@ -1,0 +1,145 @@
+# Topologie de déploiement de RÉFÉRENCE (docs/11 §6.6, §14.3, D11) : Traefik est le seul service qui publie des ports.
+# `web` et `api` n'ont aucun `ports:` et ne sont joignables que sur le réseau interne `edge`.
+# Aucun PostgreSQL ici : la base est gérée.
+# Secrets : fichiers de infra/deploy/secrets/ (générés par init-secrets.sh) montés en secrets Docker ; aucun secret en variable
+# d'environnement du compose. entrypoint-secrets.sh exporte NOM depuis NOM_FILE juste avant de lancer le processus.
+# Essai local : DOMAIN=ghmt.localhost, ACME_ENABLED vide (certificat auto-signé de Traefik), voir infra/deploy/README.md.
+name: ghmt-prod
+
+x-secrets-entrypoint: &secrets_entrypoint ["/bin/sh", "/entrypoint-secrets.sh"]
+x-hardening: &hardening
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  traefik:
+    # traefik:v3.7.13
+    image: traefik:v3.7.13@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0
+    <<: *hardening
+    entrypoint: ["/bin/sh", "/entrypoint-secrets.sh", "traefik"]
+    command:
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # Aucun amont devant Traefik : toute valeur reçue de X-Forwarded-* est écrasée (TRUSTED_PROXY_HOPS=1).
+      # Derrière un CDN ou un répartiteur, déclarer ses plages ici ET passer TRUSTED_PROXY_HOPS à 2 (README).
+      - --entrypoints.web.forwardedHeaders.trustedIPs=
+      - --entrypoints.websecure.forwardedHeaders.trustedIPs=
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@example.invalid}
+      - --certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json
+      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+      - --api.dashboard=false
+      - --accesslog=false
+    # Écoute sur 80/443 : seule capacité conservée.
+    cap_add: [NET_BIND_SERVICE]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Lues par le modèle Go de traefik/dynamic.yml.
+      DOMAIN: ${DOMAIN:?DOMAIN est obligatoire}
+      ACME_ENABLED: ${ACME_ENABLED:-}
+      EDGE_PROXY_SECRET_FILE: /run/secrets/edge_proxy_secret
+    secrets: [edge_proxy_secret]
+    volumes:
+      - ./entrypoint-secrets.sh:/entrypoint-secrets.sh:ro
+      - ./traefik:/etc/traefik/dynamic:ro
+      - traefik-acme:/acme
+    tmpfs: ["/tmp"]
+    networks: [edge, public]
+
+  web:
+    build: { context: ../.., dockerfile: apps/web/Dockerfile }
+    <<: *hardening
+    entrypoint: *secrets_entrypoint
+    command: ["node_modules/.bin/next", "start", "-p", "3001"]
+    environment:
+      NODE_ENV: production
+      API_URL: http://api:3000/api/v1
+      SESSION_COOKIE_SECURE: "true"
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
+      EDGE_PROXY_SECRET_FILE: /run/secrets/edge_proxy_secret
+      CSP_MODE: ${CSP_MODE:-enforce}
+      CSP_REPORT_URI: ${CSP_REPORT_URI:-}
+      CSP_FORM_ACTION_ORIGINS: ${CSP_FORM_ACTION_ORIGINS:-}
+    secrets: [edge_proxy_secret]
+    volumes:
+      - ./entrypoint-secrets.sh:/entrypoint-secrets.sh:ro
+    expose: ["3001"]
+    tmpfs: ["/tmp", "/app/.next/cache"]
+    networks: [edge]
+
+  api:
+    build: { context: ../.., dockerfile: apps/api/Dockerfile }
+    <<: *hardening
+    entrypoint: *secrets_entrypoint
+    command: ["node", "dist/main.js"]
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      JWT_ISSUER: ${JWT_ISSUER:?}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:?}
+      WEB_URL: https://${DOMAIN:?}
+      CORS_ORIGINS: https://${DOMAIN:?}
+      # Seul le BFF (réseau `edge`) est un proxy de confiance pour X-Forwarded-For : sous-réseau fixé ci-dessous.
+      TRUSTED_PROXIES: 172.30.0.0/24
+      RATE_LIMIT_STORE: redis
+      SMTP_HOST: ${SMTP_HOST:?}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      MAIL_FROM: ${MAIL_FROM:?}
+      # Secrets : exportés par entrypoint-secrets.sh depuis /run/secrets/*.
+      DATABASE_URL_FILE: /run/secrets/database_url
+      PLATFORM_DATABASE_URL_FILE: /run/secrets/platform_database_url
+      REDIS_URL_FILE: /run/secrets/redis_url
+      JWT_ACCESS_SECRET_FILE: /run/secrets/jwt_access_secret
+      JWT_PLATFORM_SECRET_FILE: /run/secrets/jwt_platform_secret
+      DATA_ENCRYPTION_KEY_FILE: /run/secrets/data_encryption_key
+      BLIND_INDEX_KEY_FILE: /run/secrets/blind_index_key
+    secrets: [database_url, platform_database_url, redis_url, jwt_access_secret, jwt_platform_secret, data_encryption_key, blind_index_key]
+    volumes:
+      - ./entrypoint-secrets.sh:/entrypoint-secrets.sh:ro
+    expose: ["3000"]
+    depends_on: [redis]
+    tmpfs: ["/tmp"]
+    networks: [edge, data, egress]
+
+  redis:
+    # redis:7.4.11-alpine
+    image: redis:7.4.11-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    <<: *hardening
+    # Mot de passe obligatoire (docs/11 §14.3.2) : lu dans le secret, jamais en argument visible de `docker inspect`.
+    entrypoint: ["/bin/sh", "-c", "exec redis-server --save '' --appendonly no --requirepass \"$(cat /run/secrets/redis_password)\""]
+    user: redis
+    secrets: [redis_password]
+    tmpfs: ["/data"]
+    networks: [data]
+
+secrets:
+  edge_proxy_secret: { file: ./secrets/edge_proxy_secret }
+  database_url: { file: ./secrets/database_url }
+  platform_database_url: { file: ./secrets/platform_database_url }
+  redis_url: { file: ./secrets/redis_url }
+  redis_password: { file: ./secrets/redis_password }
+  jwt_access_secret: { file: ./secrets/jwt_access_secret }
+  jwt_platform_secret: { file: ./secrets/jwt_platform_secret }
+  data_encryption_key: { file: ./secrets/data_encryption_key }
+  blind_index_key: { file: ./secrets/blind_index_key }
+
+networks:
+  # Réseau de Traefik (seul service à publier des ports).
+  public: {}
+  # Sortie vers la base gérée et le SMTP, sans aucun port publié.
+  egress: {}
+  # Réseau interne : aucun accès depuis l'extérieur de l'hôte Docker.
+  edge:
+    internal: true
+    ipam:
+      config: [{ subnet: 172.30.0.0/24 }]
+  data:
+    internal: true
+
+volumes:
+  traefik-acme:

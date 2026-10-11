@@ -1,4 +1,4 @@
-import { disableUserAction, enableUserAction, resendInvitationAction, revokeSessionsAction, unlockUserAction } from '@/actions/admin-users';
+import { disableUserAction, enableUserAction, resendInvitationAction, resetUserMfaAction, revokeSessionsAction, unlockUserAction } from '@/actions/admin-users';
 import { ActionForm } from '@/components/forms/ActionForm';
 import { availableUserActions, type UserActionKind, type UserActionRights } from '@/lib/domain/admin';
 import { ConfirmAction } from './ConfirmAction';
@@ -18,10 +18,16 @@ const DIRECT = {
 const CONFIRMED = {
   disable: { action: disableUserAction, summary: 'Désactiver le compte', confirm: 'Confirmer la désactivation', warning: 'L\'utilisateur ne pourra plus se connecter et ses sessions seront coupées.' },
   revokeSessions: { action: revokeSessionsAction, summary: 'Révoquer les sessions', confirm: 'Confirmer la révocation', warning: 'L\'utilisateur sera déconnecté de tous ses appareils.' },
+  resetMfa: {
+    action: resetUserMfaAction,
+    summary: 'Réinitialiser le second facteur',
+    confirm: 'Confirmer la réinitialisation',
+    warning: 'Le second facteur de l\'utilisateur sera supprimé, ses sessions seront coupées et il devra enrôler à nouveau son application d\'authentification. Il en sera informé par e-mail.',
+  },
 } as const;
 
 function ActionView({ kind, userId }: { readonly kind: UserActionKind; readonly userId: string }) {
-  if (kind === 'disable' || kind === 'revokeSessions') {
+  if (kind === 'disable' || kind === 'revokeSessions' || kind === 'resetMfa') {
     const spec = CONFIRMED[kind];
     return <ConfirmAction action={spec.action} hidden={{ userId }} summary={spec.summary} confirmLabel={spec.confirm} warning={spec.warning} idPrefix={`${kind}-`} />;
   }

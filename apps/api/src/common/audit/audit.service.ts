@@ -47,9 +47,15 @@ export function auditPayload(row: {
 }
 
 /** `patientIds` (lectures groupées : recherche, liste d'agenda) est conservé dans `changes`, jamais en colonne dédiée. */
-function mergeChanges(event: AuditEvent): Record<string, unknown> | null {
-  if (!event.changes && !event.patientIds) return null;
-  return { ...event.changes, ...(event.patientIds ? { patientIds: [...event.patientIds] } : {}) };
+function mergeChanges(event: AuditEvent, networkTrusted: boolean | undefined): Record<string, unknown> | null {
+  // Accès à un patient depuis un réseau évalué hors confiance (docs/11 §14.2.11) : tracé pour la revue des accès.
+  const offNetwork = networkTrusted === false && Boolean(event.patientId || event.patientIds);
+  if (!event.changes && !event.patientIds && !offNetwork) return null;
+  return {
+    ...event.changes,
+    ...(event.patientIds ? { patientIds: [...event.patientIds] } : {}),
+    ...(offNetwork ? { offNetwork: true } : {}),
+  };
 }
 
 /**
@@ -86,7 +92,7 @@ export class AuditService {
       resourceId: event.resourceId ?? null,
       patientId: event.patientId ?? null,
       outcome: event.outcome ?? 'success',
-      changes: mergeChanges(event),
+      changes: mergeChanges(event, state?.networkTrusted),
       requestId: state?.requestId ?? null,
     };
     const hash = chainHash(prevHash, auditPayload(row));

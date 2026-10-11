@@ -11,6 +11,7 @@ import { auditEntries, bearer, createCustomRole, createSite } from './support';
 
 const BASE = '/api/v1/iam/users';
 const UNKNOWN_ID = '0198a000-0000-7000-8000-0000000000ff';
+const REASON = 'Identité vérifiée en face à face au secrétariat.';
 let counter = 0;
 const newUser = (tenant: TenantFixture, extra: Record<string, unknown> = {}) => ({
   fullName: 'Awa Diop',
@@ -334,20 +335,17 @@ describe('iam : utilisateurs (HTTP)', () => {
   });
 
   describe('déverrouillage (C8)', () => {
-    const lock = (userId: string) =>
-      app.get(TenantDb).runAs(a.tenantId, (tx) =>
-        tx.userCredential.update({
-          where: { tenantId_userId: { tenantId: a.tenantId, userId } },
-          data: { failedAttempts: 5, lockedUntil: new Date(Date.now() + 3_600_000) },
-        }),
-      );
+    /** Cinq échecs de connexion consécutifs : le délai progressif (30 s) s'applique ensuite (docs/11 D3). */
+    const slowDown = async (email: string) => {
+      for (let i = 0; i < 5; i += 1) await postLogin(app, a.slug, email, 'mauvais-mot-de-passe').expect(401);
+    };
 
-    it('remet à zéro les échecs et le verrou : la connexion redevient possible, avec audit', async () => {
+    it('remet à zéro les échecs et le délai de connexion : la connexion redevient possible, avec audit', async () => {
       const user = await createUserWithRole(app, a, 'receptionist');
-      await lock(user.userId);
-      await postLogin(app, a.slug, user.email).expect(401);
+      await slowDown(user.email);
+      expect((await postLogin(app, a.slug, user.email).expect(429)).body.code).toBe('login_delayed');
 
-      const res = await http().post(`${BASE}/${user.userId}/unlock`).set(bearer(a.adminToken)).expect(200);
+      const res = await http().post(`${BASE}/${user.userId}/unlock`).set(bearer(a.adminToken)).send({ reason: REASON }).expect(200);
 
       expect(res.body.data).toMatchObject({ id: user.userId, status: 'active' });
       await postLogin(app, a.slug, user.email).expect(200);
@@ -360,15 +358,15 @@ describe('iam : utilisateurs (HTTP)', () => {
     it('est idempotent et accepté pour un utilisateur sans identifiants (invité)', async () => {
       const invited = (await createUser(newUser(a)).expect(201)).body.data.id as string;
 
-      await http().post(`${BASE}/${invited}/unlock`).set(bearer(a.adminToken)).expect(200);
-      await http().post(`${BASE}/${invited}/unlock`).set(bearer(a.adminToken)).expect(200);
+      await http().post(`${BASE}/${invited}/unlock`).set(bearer(a.adminToken)).send({ reason: REASON }).expect(200);
+      await http().post(`${BASE}/${invited}/unlock`).set(bearer(a.adminToken)).send({ reason: REASON }).expect(200);
     });
 
     it('refuse sans permission iam:user:update (403) et sans jeton (401), 404 pour un autre établissement ou un identifiant mal formé', async () => {
-      await http().post(`${BASE}/${a.adminUserId}/unlock`).set(bearer(receptionist.token)).expect(403);
-      await http().post(`${BASE}/${a.adminUserId}/unlock`).expect(401);
-      await http().post(`${BASE}/${b.adminUserId}/unlock`).set(bearer(a.adminToken)).expect(404);
-      await http().post(`${BASE}/pas-un-uuid/unlock`).set(bearer(a.adminToken)).expect(404);
+      await http().post(`${BASE}/${a.adminUserId}/unlock`).set(bearer(receptionist.token)).send({ reason: REASON }).expect(403);
+      await http().post(`${BASE}/${a.adminUserId}/unlock`).send({ reason: REASON }).expect(401);
+      await http().post(`${BASE}/${b.adminUserId}/unlock`).set(bearer(a.adminToken)).send({ reason: REASON }).expect(404);
+      await http().post(`${BASE}/pas-un-uuid/unlock`).set(bearer(a.adminToken)).send({ reason: REASON }).expect(404);
     });
   });
 });

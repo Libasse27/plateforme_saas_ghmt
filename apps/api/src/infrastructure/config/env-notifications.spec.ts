@@ -112,4 +112,9 @@ describe('loadEnv : webhooks du sandbox SMS', () => {
     expect(loadEnv({ ...BASE, SMS_SANDBOX_WEBHOOKS_ENABLED: 'true' }).SMS_SANDBOX_WEBHOOKS_ENABLED).toBe(true);
     expect(() => loadEnv({ ...BASE, SMS_SANDBOX_WEBHOOKS_ENABLED: 'oui' })).toThrow(/SMS_SANDBOX_WEBHOOKS_ENABLED/);
   });
+
+  it('sont interdits en production, même avec un autre fournisseur que le sandbox', () => {
+    expect(() => loadEnv({ ...PRODUCTION, SMS_SANDBOX_WEBHOOKS_ENABLED: 'true' })).toThrow(/SMS_SANDBOX_WEBHOOKS_ENABLED/);
+    expect(loadEnv({ ...PRODUCTION, SMS_SANDBOX_WEBHOOKS_ENABLED: 'false' }).SMS_SANDBOX_WEBHOOKS_ENABLED).toBe(false);
+  });
 });

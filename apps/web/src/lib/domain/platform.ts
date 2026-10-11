@@ -19,7 +19,7 @@ import { amount, bool, num, rec, str, strOrNull, strings } from './raw';
 import { toEntitlements, toPublicPlan, toSaasInvoice, toSubscription } from './subscription';
 
 export const TENANT_STATUS_LABELS: Readonly<Record<string, string>> = {
-  pending: 'En attente',
+  pending: 'En attente de confirmation',
   active: 'Actif',
   suspended: 'Suspendu',
   terminated: 'Résilié',

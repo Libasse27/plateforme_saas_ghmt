@@ -95,3 +95,48 @@ export function quotaVariables(context: QuotaContext, facts: { tenantName: strin
     lien: facts.link,
   };
 }
+
+export type SecurityScopeType = 'tenant' | 'site' | 'department';
+
+/** Contexte d'une alerte de sécurité : seuls les champs utiles au type sont renseignés. */
+export interface SecurityContext {
+  readonly targetUserId?: string;
+  readonly targetName?: string;
+  readonly roleName?: string;
+  readonly scopeType?: SecurityScopeType;
+  readonly actorName?: string;
+}
+
+const SCOPE_LABEL: Readonly<Record<NotificationLocaleCode, Record<SecurityScopeType, string>>> = {
+  fr: { tenant: 'l’établissement', site: 'un site', department: 'un service' },
+  en: { tenant: 'the establishment', site: 'a site', department: 'a department' },
+};
+
+const SECURITY_CONSOLE_PATH = '/administration/securite';
+
+/** Chemin (relatif) de la fiche utilisateur. */
+export function securityUserPath(targetUserId: string): string {
+  return `/administration/utilisateurs/${targetUserId}`;
+}
+
+/** Lien d'une alerte : la console de sécurité pour les réseaux et la politique, sinon la fiche de la personne visée. */
+export function securityLinkPath(typeCode: string, context: SecurityContext): string {
+  if (typeCode === 'security.trusted_network_changed' || typeCode === 'security.policy_changed') return SECURITY_CONSOLE_PATH;
+  return context.targetUserId ? securityUserPath(context.targetUserId) : SECURITY_CONSOLE_PATH;
+}
+
+/** Seul le TYPE de portée est transmis, jamais le nom d'un site ou d'un service (docs/11 D10). */
+export function securityVariables(
+  context: SecurityContext,
+  facts: { tenantName: string; senderDisplayName: string | null; webUrl: string; locale: NotificationLocaleCode; typeCode?: string },
+): Values {
+  const scope = SCOPE_LABEL[facts.locale];
+  return {
+    'etablissement.nom': displayName(facts),
+    'utilisateur.nom': context.targetName ?? '',
+    'role.nom': context.roleName ?? '',
+    'portee.type': scope[context.scopeType ?? 'tenant'] ?? scope.tenant,
+    'acteur.nom': context.actorName ?? '',
+    lien: `${facts.webUrl.replace(/\/+$/, '')}${securityLinkPath(facts.typeCode ?? 'security.sensitive_role_assigned', context)}`,
+  };
+}

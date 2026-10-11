@@ -10,6 +10,7 @@ import { firstValues, toUserSummary, USER_STATUS_LABELS } from '@/lib/domain/adm
 import { isOpaqueCursor } from '@/lib/domain/notifications';
 import { requireMe } from '@/server/me';
 import { loadList, nextCursorOf } from '../_lib/page-data';
+import { loadOwnerId } from './owner';
 
 export const metadata: Metadata = { title: 'Utilisateurs' };
 
@@ -41,7 +42,10 @@ export default async function UsersPage({ searchParams }: { readonly searchParam
     q: params.q?.trim().slice(0, MAX_QUERY_LENGTH) || undefined,
   };
   const cursor = isOpaqueCursor(params.apres) ? params.apres : undefined;
-  const result = await loadList('/iam/users', toUserSummary, { status: filters.status, q: filters.q, cursor, limit: PAGE_SIZE });
+  const [result, ownerId] = await Promise.all([
+    loadList('/iam/users', toUserSummary, { status: filters.status, q: filters.q, cursor, limit: PAGE_SIZE }),
+    loadOwnerId(me),
+  ]);
   const nextCursor = result.ok ? nextCursorOf(result.meta) : null;
 
   return (
@@ -65,7 +69,7 @@ export default async function UsersPage({ searchParams }: { readonly searchParam
         </div>
         <button type="submit" className={buttonClass.primary}>Filtrer</button>
       </form>
-      {result.ok ? <UsersTable users={result.value} timeZone={me.tenant.timezone} /> : <Alert tone="error">{result.message}</Alert>}
+      {result.ok ? <UsersTable users={result.value} ownerId={ownerId} timeZone={me.tenant.timezone} /> : <Alert tone="error">{result.message}</Alert>}
       {cursor || nextCursor ? (
         <nav aria-label="Pagination" className="mt-4 flex gap-3">
           {cursor ? <Link href={listHref(filters, null)} className={buttonClass.secondary}>Retour au début</Link> : null}

@@ -1,0 +1,60 @@
+# Configuration dynamique de Traefik (fournisseur fichier, modèle Go : les variables viennent de l'environnement du conteneur).
+# docs/11 D11 : le proxy injecte X-Ghmt-Edge-Auth en ÉCRASANT toute valeur reçue, et le BFF refuse (403) toute requête sans lui.
+http:
+  middlewares:
+    # Redirection HTTP -> HTTPS.
+    https-redirect:
+      redirectScheme:
+        scheme: https
+        permanent: true
+    # Secret de bordure : customRequestHeaders remplace la valeur envoyée par le client.
+    edge-auth:
+      headers:
+        customRequestHeaders:
+          X-Ghmt-Edge-Auth: '{{ env "EDGE_PROXY_SECRET" }}'
+    # Limite de débit d'entrée, par IP cliente (le détail fin reste dans l'API).
+    entry-rate-limit:
+      rateLimit:
+        average: 50
+        burst: 100
+        period: 1s
+  routers:
+    redirect:
+      rule: 'Host(`{{ env "DOMAIN" }}`)'
+      entryPoints: [web]
+      middlewares: [https-redirect]
+      service: noop@internal
+      priority: 100
+    # Routeur PUBLIC de l'API (docs/11 §14.3.2) : webhooks des fournisseurs et sonde de santé minimale uniquement.
+    # Le BFF joint l'API en interne (http://api:3000) ; /api/v1/health/ready (détail) n'est jamais routé.
+    api:
+      rule: 'Host(`{{ env "DOMAIN" }}`) && (PathPrefix(`/api/v1/webhooks`) || Path(`/api/v1/health`))'
+      entryPoints: [websecure]
+      middlewares: [entry-rate-limit]
+      service: api
+      priority: 20
+      tls:
+        options: default
+{{- if env "ACME_ENABLED" }}
+        certResolver: letsencrypt
+{{- end }}
+    web:
+      rule: 'Host(`{{ env "DOMAIN" }}`)'
+      entryPoints: [websecure]
+      middlewares: [entry-rate-limit, edge-auth]
+      service: web
+      priority: 10
+      tls:
+        options: default
+{{- if env "ACME_ENABLED" }}
+        certResolver: letsencrypt
+{{- end }}
+  services:
+    api:
+      loadBalancer:
+        servers:
+          - url: http://api:3000
+    web:
+      loadBalancer:
+        servers:
+          - url: http://web:3001

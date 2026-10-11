@@ -132,6 +132,23 @@ describe('utilisateurs', () => {
     expect(screen.queryByRole('link', { name: 'Inviter un utilisateur' })).not.toBeInTheDocument();
     expect(screen.getByText('Aucun utilisateur ne correspond à ces critères.')).toBeInTheDocument();
   });
+  it('colonne « Dernière activité » et badge du principal relu dans la politique', async () => {
+    setMe(['iam:user:read', 'iam:policy:read']);
+    state.routes.set('/iam/users', [{ ...userRow(1), lastSeenAt: '2026-10-05T10:15:00.000Z' }, userRow(2)]);
+    state.routes.set('/iam/security/policy', { owner: { id: userRow(2).id, fullName: 'Personnel 2' } });
+    render(await UsersPage({ searchParams: search() }));
+    expect(screen.getByRole('columnheader', { name: 'Dernière activité' })).toBeInTheDocument();
+    expect(screen.getByText('05/10/2026 10:15')).toBeInTheDocument();
+    expect(screen.getByText('Personnel 2').closest('tr')).toHaveTextContent('Administrateur principal');
+  });
+  it('politique indisponible : la liste s\'affiche quand même, sans badge', async () => {
+    setMe(['iam:user:read', 'iam:policy:read']);
+    state.routes.set('/iam/users', [userRow(1)]);
+    state.routes.set('/iam/security/policy', new ApiError({ status: 500, code: 'x' }));
+    render(await UsersPage({ searchParams: search() }));
+    expect(screen.getByText('Personnel 1')).toBeInTheDocument();
+    expect(screen.queryByText('Administrateur principal')).not.toBeInTheDocument();
+  });
   it('erreur de l\'API', async () => {
     setMe(['iam:user:read']);
     state.routes.set('/iam/users', new ApiError({ status: 500, code: 'x' }));
@@ -164,6 +181,30 @@ describe('fiche utilisateur', () => {
     setMe(['iam:user:read']);
     await expect(UserPage({ params: Promise.resolve({ id: '../x' }) })).rejects.toThrow('NOT_FOUND');
     await expect(UserPage({ params: Promise.resolve({ id: USER }) })).rejects.toThrow('NOT_FOUND');
+  });
+  it('affiche la dernière activité, le badge du principal et la réinitialisation du second facteur', async () => {
+    setMe(['iam:user:read', 'iam:user:update', 'iam:policy:read']);
+    state.routes.set(`/iam/users/${USER}`, { ...detail, status: 'active', lastSeenAt: '2026-10-05T10:15:00.000Z' });
+    state.routes.set('/iam/security/policy', { owner: { id: USER, fullName: 'Personnel 1' } });
+    render(await UserPage({ params: Promise.resolve({ id: USER }) }));
+    expect(screen.getByText(/Dernière activité : 05\/10\/2026 10:15/)).toBeInTheDocument();
+    expect(screen.getByText('Administrateur principal')).toBeInTheDocument();
+    expect(screen.getByText('Réinitialiser le second facteur')).toBeInTheDocument();
+  });
+  it('dernière activité « jamais » ; pas de réinitialisation du second facteur sur soi-même ni sans droit', async () => {
+    setMe(['iam:user:read', 'iam:user:update']);
+    state.routes.set(`/iam/users/${USER}`, { ...detail, status: 'active' });
+    render(await UserPage({ params: Promise.resolve({ id: USER }) }));
+    expect(screen.getByText(/Dernière activité : jamais/)).toBeInTheDocument();
+    expect(screen.getByText('Réinitialiser le second facteur')).toBeInTheDocument();
+    expect(state.calls.some((c) => c.path === '/iam/security/policy')).toBe(false);
+  });
+  it('soi-même : aucun bouton de réinitialisation du second facteur', async () => {
+    setMe(['iam:user:read', 'iam:user:update']);
+    state.me = { ...(state.me as Me), user: { ...(state.me as Me).user, id: USER } };
+    state.routes.set(`/iam/users/${USER}`, { ...detail, status: 'active' });
+    render(await UserPage({ params: Promise.resolve({ id: USER }) }));
+    expect(screen.queryByText('Réinitialiser le second facteur')).not.toBeInTheDocument();
   });
   it('affectations vides : message explicite', async () => {
     setMe(['iam:user:read', 'iam:assignment:read']);

@@ -8,6 +8,9 @@ import { RequestContext } from './common/context/request-context';
 import { MAILER, type Mailer } from './common/mail/mailer';
 import { MemoryMailer } from './common/mail/memory-mailer';
 import { SmtpMailer } from './common/mail/smtp-mailer';
+import { RATE_LIMIT_STORE, rateLimitStoreFor } from './common/rate-limit/rate-limit-runtime';
+import { RedisLifecycle, redisProvider, REDIS_CLIENT } from './common/redis/redis.provider';
+import { BackgroundTasks } from './common/tasks/background-tasks';
 import { Clock } from './common/time/clock';
 import { FieldCrypto } from './common/crypto/field-crypto.service';
 import { ENV, loadEnv, type Env } from './infrastructure/config/env';
@@ -32,6 +35,7 @@ const CORE_PROVIDERS = [
   PasswordService,
   TenantProvisioningService,
   Clock,
+  BackgroundTasks,
 ];
 
 /** Services transversaux disponibles dans tous les modules métier. */
@@ -42,8 +46,12 @@ const CORE_PROVIDERS = [
     { provide: ENV, useFactory: () => loadEnv() },
     // Transport mémoire sous test (aucun SMTP requis) ; SMTP (Mailpit en dev) sinon.
     { provide: MAILER, inject: [ENV], useFactory: (env: Env): Mailer => (env.NODE_ENV === 'test' ? new MemoryMailer() : new SmtpMailer(env)) },
+    redisProvider,
+    RedisLifecycle,
+    // Même instance que celle du limiteur HTTP (`buildThrottlerOptions`) : délai progressif et débit partagent le stockage.
+    { provide: RATE_LIMIT_STORE, inject: [ENV], useFactory: (env: Env) => rateLimitStoreFor(env) },
     ...CORE_PROVIDERS,
   ],
-  exports: [ENV, MAILER, ...CORE_PROVIDERS],
+  exports: [ENV, MAILER, REDIS_CLIENT, RATE_LIMIT_STORE, ...CORE_PROVIDERS],
 })
 export class CoreModule {}

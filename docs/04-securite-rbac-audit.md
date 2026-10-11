@@ -158,6 +158,10 @@ Un « pepper » applicatif (HMAC-SHA-256 du mot de passe avec une clé stockée 
 
 **Enrôlement** : `POST /auth/mfa/totp/setup` renvoie l'URI `otpauth://` (QR code), puis `POST /auth/mfa/totp/activate` exige un premier code valide. À l'activation, 10 **codes de secours** sont générés.
 
+**Enrôlement hors réseau de confiance** (docs/11 D7) : sur un réseau de confiance, `setup` s'appelle sans code ; sinon `POST /auth/mfa/totp/email-code` envoie un code à 6 chiffres à l'adresse du compte (TTL 10 min, 5 essais, haché par HMAC-SHA-256 avec une clé dérivée de `BLIND_INDEX_KEY`, lié à la session, 3 envois par 15 min) et `setup` l'exige (`403 mfa_email_code_required`). Cela ferme l'enrôlement « à la première utilisation » hors de l'établissement.
+
+**MFA des soignants hors réseau** (docs/11 D4-D6) : un rôle est *clinique* s'il porte au moins une permission des modules `consultations`, `nursing`, `maternity`, `inpatient`, `laboratory`, `imaging`, `pharmacy` (calcul sur les permissions effectives). En mode `off_network` (défaut), un titulaire sans session vérifiée par MFA est refusé (`403 mfa_enrollment_required`) quand l'IP cliente vue par l'API n'appartient pas à une plage déclarée (`tenant.trusted_networks`, préfixe ≥ /16 IPv4 ou /32 IPv6, 50 au plus) ; l'évaluation a lieu à chaque requête, et **aucune plage déclarée signifie que tous les réseaux sont hors confiance**. Le mode `always` l'exige partout. Les plages sont publiques : une IP de box 4G (CGNAT) ou dynamique est partagée ou instable.
+
 **Codes de secours** : 10 codes à usage unique de 10 caractères (alphabet sans ambiguïté), affichés une seule fois, stockés sous forme de hash (Argon2id ou HMAC-SHA-256 avec pepper). Chaque utilisation est auditée et notifiée à l'utilisateur ; la régénération invalide l'ancien lot.
 
 **OTP SMS (option)** : disponible par tenant, déconseillé pour les rôles privilégiés (risque d'échange de SIM), mais utile en contexte de faible équipement. Code de 6 chiffres, TTL 5 min, 3 essais maximum, 5 envois par heure et par numéro, hash du code stocké dans Redis, coût SMS plafonné par tenant (quota de l'abonnement).
@@ -232,17 +236,17 @@ La révocation écrit `sess:revoked:{sid}` dans Redis (effet immédiat sur les J
 | Niveau | Règle | Réaction |
 |---|---|---|
 | IP | 20 tentatives de login / 15 min | 429 + délai |
-| Compte (par identifiant) | 5 échecs consécutifs | Verrouillage progressif : 1 min, 5 min, 15 min, 1 h, plafonné (pas de verrouillage définitif, pour éviter le déni de service ciblé) |
+| Compte (par identifiant soumis) | 5 échecs consécutifs | **Délai progressif** (docs/11 D3) : la tentative suivante n'est examinée qu'après 30, 60, 120, 300, 600 puis 900 s (plafond) depuis le dernier échec ; `429 login_delayed` + `Retry-After` avant toute vérification, même avec le bon mot de passe (pas de verrouillage dur, donc pas de déni de service ciblé) |
 | Tenant | Pic anormal d'échecs (ex. > 100 / 5 min) | Alerte sécurité, CAPTCHA (Turnstile/hCaptcha) activé |
 | MFA | 5 essais par challenge | Challenge invalidé, retour au login |
 | OTP SMS | 3 essais, 5 envois / h / numéro | Blocage temporaire |
 
-Compteurs dans Redis (clés `rl:login:ip:{ip}`, `rl:login:acct:{tenant}:{hash(identifiant)}`). Le verrouillage compte n'indique pas à l'appelant si le compte existe. L'utilisateur légitime est notifié par email du verrouillage, avec lien de déblocage par réinitialisation.
+Compteurs dans Redis (préfixe `RATE_LIMIT_KEY_PREFIX`). Le compteur d'échecs est indexé sur `sha256(tenantSlug|email)` que le compte existe ou non : la réponse est identique pour un identifiant inexistant. Il expire 24 h après le dernier échec et se remet à zéro à la connexion réussie, à la réinitialisation du mot de passe et au déverrouillage par un administrateur. Au 10e échec consécutif d'un compte existant, un e-mail « tentatives inhabituelles » (lien vers la réinitialisation) part, au plus un par 24 h. `user_credentials.locked_until` n'est plus écrit (colonne conservée) ; le verrou dur ne subsiste que pour le realm plateforme.
 
 ### 1.8 Récupération de compte
 
-- **Mot de passe oublié** : lien à usage unique, jeton de 256 bits, hash stocké, TTL 30 min, réponse identique que le compte existe ou non. À la validation : toutes les sessions sont révoquées. Pour les comptes avec MFA, un second facteur est exigé pour finaliser (sauf perte du second facteur, voir ci-dessous).
-- **Perte du second facteur** : (1) code de secours ; (2) sinon réinitialisation par un administrateur de l'établissement (permission `iam:user:update`) après vérification d'identité hors bande ; l'action est auditée, notifiée à l'utilisateur et impose un nouvel enrôlement TOTP à la connexion suivante. Pour un admin établissement sans autre admin : procédure Support plateforme avec vérification documentée (pièce d'identité + contact du contrat) et grant audité.
+- **Mot de passe oublié** (docs/11 D8) : `POST /auth/password/forgot` répond toujours `202` ; la résolution, le jeton et l'e-mail s'exécutent après la réponse (aucun écart de temps). Lien à usage unique `/reinitialiser/<jeton>` (jeton de 256 bits transmis dans le corps des requêtes, hash stocké, TTL 30 min, une nouvelle demande invalide les précédentes, page web à confirmation par clic). À la validation : toutes les sessions sont révoquées, le compteur d'échecs remis à zéro, aucune connexion automatique, e-mail de confirmation sans jeton. Pour les comptes avec TOTP, un code TOTP ou de secours est exigé (5 essais puis jeton brûlé). Aucun e-mail n'est envoyé à un compte « invité » ou désactivé.
+- **Perte du second facteur** : (1) code de secours ; (2) sinon réinitialisation par un administrateur de l'établissement (permission `iam:user:update`) après vérification d'identité hors bande ; l'action (`DELETE /iam/users/{id}/mfa`, `iam.user.mfa_reset`) révoque les sessions, est notifiée à l'utilisateur et impose un nouvel enrôlement TOTP à la connexion suivante (avec code e-mail hors réseau de confiance). Pour un admin établissement sans autre admin : procédure Support plateforme avec vérification documentée (pièce d'identité + contact du contrat) et grant audité.
 - **Compte patient** : récupération par OTP sur le numéro enregistré ; changement de numéro avec vérification en personne à l'accueil de l'établissement ou double OTP (ancien et nouveau numéro).
 - **Délai de carence** : après réinitialisation du MFA, les actions les plus sensibles (export, changement d'email) sont bloquées 24 h.
 
@@ -532,6 +536,10 @@ Garde-fous : lecture seule par défaut, limité à un patient, durée de 2 h, ch
 > - un **rôle système** (modèle immuable) **sans permission `iam:` en écriture** est délégable **à autrui** par tout acteur détenant `iam:assignment:create` (ou `:delete` pour la révocation) sur la portée visée ;
 > - l'**auto-affectation**, les **rôles personnalisés** et les rôles portant des droits d'administration (`tenant_admin`) restent soumis à l'anti-escalade stricte ;
 > - toutes les affectations sont auditées. Les rôles système étant non modifiables (409 `system_role_immutable`), personne ne peut y injecter de permissions pour contourner la règle.
+
+#### Hiérarchie entre administrateurs (docs/11 D9)
+
+Pour détecter un administrateur complice, l'établissement a **un administrateur principal** (`tenant.security_settings.owner_user_id`), posé par trigger à la première affectation `tenant_admin` portée par l'établissement. Rangs : 2 principal, 1 titulaire d'un rôle d'administration en écriture (`iam:*` hors `:read`), 0 autres. Toute action sur un **autre** utilisateur de rang ≥ 1 exige `rang(acteur) > rang(cible)` (`403 admin_hierarchy`) ; accorder un rôle d'administration en écriture est réservé au principal (`403 owner_required`) ; le principal ne peut ni se désactiver ni perdre `tenant_admin` avant transfert (`409 owner_must_transfer`). Transfert : `POST /iam/security/owner` par le principal vers un administrateur actif ayant un TOTP actif ; en cas de départ du principal, script terminal `apps/api/scripts/transfer-tenant-owner.mts` (rôle propriétaire, refusé si la sortie est redirigée, audit `iam.owner.transferred` avec `via: 'cli'`). Les affectations de rôles sensibles (cliniques et financiers) sont notifiées aux directeurs (à défaut au principal), jamais à l'acteur ni à la cible, sans nom de service (`security.sensitive_role_assigned`).
 
 ### 3.7 Matrice rôles × permissions par défaut
 
@@ -1204,7 +1212,7 @@ export const CreatePatientSchema = z.object({
 | Endpoints sensibles | Limites dédiées | login 10/15 min/IP, OTP SMS 5/h/numéro, reset mot de passe 5/h/compte, export 10/jour/utilisateur |
 | Webhooks entrants | Limite et signature | Par fournisseur |
 
-Réponse `429` avec `Retry-After`. Mode dégradé : si Redis est indisponible, limites locales en mémoire par instance (pas d'absence de limitation).
+Réponse `429` avec `Retry-After`. Implémentation (docs/11 D2) : `ThrottlerStorage` sur `ioredis` avec script Lua atomique (INCR + PEXPIRE + blocage), clés `${RATE_LIMIT_KEY_PREFIX}${limiteur}:${traceur}` ; `RATE_LIMIT_STORE=redis` est obligatoire en production. Mode dégradé : si Redis est indisponible, repli sur des limites locales en mémoire par instance (pas d'absence de limitation), une alerte au plus par minute, et `GET /health` indique `checks.redis: 'down'`.
 
 ### 9.4 CSRF
 
@@ -1227,7 +1235,17 @@ app.use(helmet({
 app.disable('x-powered-by');
 ```
 
-Application web (Next.js) : CSP avec **nonce** par requête (middleware), `script-src 'self' 'nonce-…' 'strict-dynamic'`, `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'none'`, `form-action 'self'`, `connect-src` limité à l'API et au service d'erreurs, `img-src 'self' data: blob:` plus domaine des URLs signées ; mode `Report-Only` en pré-production puis activation. En-têtes complémentaires : `X-Content-Type-Options: nosniff`, `Permissions-Policy` (caméra/micro désactivés sauf besoin), `Cross-Origin-Opener-Policy: same-origin`, `Cache-Control: no-store` sur les réponses contenant des données de santé. Pas de `dangerouslySetInnerHTML` sans assainissement (DOMPurify), règle ESLint dédiée.
+Application web (Next.js, docs/11 D14) : `proxy.ts` pose, sur toute réponse couverte, une CSP à **nonce de 128 bits par requête** (aussi sur l'en-tête de requête pour que Next l'applique) et rend les pages en mode dynamique :
+
+```
+default-src 'self'; script-src 'self' 'nonce-…' 'strict-dynamic' [dev: 'unsafe-eval'];
+style-src 'self' 'nonce-…'; img-src 'self' data: blob:; font-src 'self';
+connect-src 'self' [dev: ws:]; object-src 'none'; base-uri 'none'; frame-src 'none';
+frame-ancestors 'none'; form-action 'self' [CSP_FORM_ACTION_ORIGINS]; manifest-src 'self';
+worker-src 'self'; [prod: upgrade-insecure-requests]; [report-uri …]
+```
+
+`CSP_MODE=report-only` (pré-production) ou `enforce` (défaut). Décrite ainsi : CSP avec **nonce** par requête (middleware), `script-src 'self' 'nonce-…' 'strict-dynamic'`, `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'none'`, `form-action 'self'`, `connect-src` limité à l'API et au service d'erreurs, `img-src 'self' data: blob:` plus domaine des URLs signées ; mode `Report-Only` en pré-production puis activation. En-têtes complémentaires : `X-Content-Type-Options: nosniff`, `Permissions-Policy` (caméra/micro désactivés sauf besoin), `Cross-Origin-Opener-Policy: same-origin`, `Cache-Control: no-store` sur les réponses contenant des données de santé. Pas de `dangerouslySetInnerHTML` sans assainissement (DOMPurify), règle ESLint dédiée.
 
 ### 9.6 Protection contre les IDOR
 

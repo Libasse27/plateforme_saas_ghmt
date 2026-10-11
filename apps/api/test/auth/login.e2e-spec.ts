@@ -7,13 +7,11 @@ import { FIXTURE_PASSWORD, createTenantFixture, createUserWithRole, type TenantF
 import { createTestApp } from '../helpers/test-app';
 import { AUTH, bearer, http, loginOk, postLogin } from './auth-helpers';
 
-const MINUTE_MS = 60_000;
-
-describe('auth : connexion, anti-énumération, verrouillage', () => {
+describe('auth : connexion et anti-énumération', () => {
   let app: INestApplication;
   let tenantDb: TenantDb;
   let tenant: TenantFixture;
-  let lockedUser: UserFixture;
+  let plainUser: UserFixture;
   let rehashUser: UserFixture;
   let disabledUser: UserFixture;
   let auditUser: UserFixture;
@@ -27,8 +25,8 @@ describe('auth : connexion, anti-énumération, verrouillage', () => {
     app = await createTestApp();
     tenantDb = app.get(TenantDb);
     tenant = await createTenantFixture(app, { prefix: 'login' });
-    [lockedUser, rehashUser, disabledUser, auditUser] = await Promise.all([
-      createUserWithRole(app, tenant, 'receptionist'),
+    [plainUser, rehashUser, disabledUser, auditUser] = await Promise.all([
+      createUserWithRole(app, tenant, 'cashier'),
       createUserWithRole(app, tenant, 'doctor'),
       createUserWithRole(app, tenant, 'nurse'),
       createUserWithRole(app, tenant, 'cashier'),
@@ -52,7 +50,7 @@ describe('auth : connexion, anti-énumération, verrouillage', () => {
   });
 
   it('indique mfaRequired=false pour un rôle sans exigence MFA, et le jeton porte mfa=false', async () => {
-    const data = await loginOk(app, tenant, lockedUser.email);
+    const data = await loginOk(app, tenant, plainUser.email);
 
     const me = await http(app).get(`${AUTH}/me`).set(bearer(data.accessToken)).expect(200);
 
@@ -81,36 +79,15 @@ describe('auth : connexion, anti-énumération, verrouillage', () => {
     expect(res.body.code).toBe('invalid_credentials');
   });
 
-  it('verrouille le compte après 5 échecs, même avec le bon mot de passe, puis le libère à l’échéance', async () => {
-    for (let i = 0; i < 5; i += 1) await postLogin(app, tenant.slug, lockedUser.email, 'mauvais-mot-de-passe').expect(401);
-    const lockedAttempt = await postLogin(app, tenant.slug, lockedUser.email).expect(401);
-    const locked = await credentialOf(lockedUser.userId);
-
-    expect(lockedAttempt.body.code).toBe('invalid_credentials');
-    expect(locked.failedAttempts).toBe(5);
-    expect(locked.lockedUntil!.getTime() - Date.now()).toBeGreaterThan(MINUTE_MS - 5_000);
-    expect(locked.lockedUntil!.getTime() - Date.now()).toBeLessThanOrEqual(MINUTE_MS);
-
-    await tenantDb.runAs(tenant.tenantId, (tx) =>
-      tx.userCredential.update({
-        where: { tenantId_userId: { tenantId: tenant.tenantId, userId: lockedUser.userId } },
-        data: { lockedUntil: new Date(Date.now() - 1000) },
-      }),
-    );
-    await postLogin(app, tenant.slug, lockedUser.email).expect(200);
-    const released = await credentialOf(lockedUser.userId);
-    expect(released).toMatchObject({ failedAttempts: 0, lockedUntil: null });
-  });
-
-  it('compte atomiquement les échecs de tentatives parallèles et verrouille le compte', async () => {
+  it('compte atomiquement les échecs de tentatives parallèles sans jamais poser de verrou dur', async () => {
     const racer = await createUserWithRole(app, tenant, 'stock_manager');
 
-    const results = await Promise.all(Array.from({ length: 8 }, () => postLogin(app, tenant.slug, racer.email, 'mauvais-mot-de-passe')));
+    const results = await Promise.all(Array.from({ length: 4 }, () => postLogin(app, tenant.slug, racer.email, 'mauvais-mot-de-passe')));
 
     const credential = await credentialOf(racer.userId);
     expect(results.every((r) => r.status === 401)).toBe(true);
-    expect(credential.failedAttempts).toBe(8);
-    expect(credential.lockedUntil).not.toBeNull();
+    expect(credential.failedAttempts).toBe(4);
+    expect(credential.lockedUntil).toBeNull();
   });
 
   it('rehache le mot de passe lorsque les paramètres Argon2 ont évolué', async () => {

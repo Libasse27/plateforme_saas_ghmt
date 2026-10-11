@@ -89,6 +89,32 @@ const BY_CODE: Readonly<Record<string, string>> = {
   empty_update: 'Indiquez au moins une information à modifier.',
   range_too_large: 'La période demandée est trop longue : réduisez-la.',
   preference_locked: 'Cette préférence est verrouillée et ne peut pas être modifiée.',
+  // Durcissement sécurité (docs/11)
+  email_verification_required: 'Confirmez l\'adresse e-mail de l\'administrateur pour activer l\'établissement.',
+  reset_token_invalid: 'Ce lien de réinitialisation est invalide ou a expiré. Demandez-en un nouveau.',
+  verification_token_invalid: 'Ce lien de confirmation est invalide, déjà utilisé ou expiré.',
+  mfa_code_required: 'Saisissez le code de vérification de votre application (ou un code de secours).',
+  mfa_email_code_required: 'Depuis ce réseau, demandez d\'abord un code reçu par e-mail pour activer le second facteur.',
+  invalid_email_code: 'Le code reçu par e-mail est invalide ou expiré.',
+  email_code_not_required: 'Aucun code par e-mail n\'est nécessaire depuis un réseau de confiance.',
+  mfa_already_enrolled: 'L\'authentification à deux facteurs est déjà activée sur ce compte.',
+  admin_hierarchy: 'Seul l\'administrateur principal peut agir sur un autre administrateur.',
+  owner_required: 'Seul l\'administrateur principal peut accorder un rôle d\'administration.',
+  owner_must_transfer: 'L\'administrateur principal doit d\'abord transférer son titre à un autre administrateur.',
+  owner_target_invalid: 'Le nouvel administrateur principal doit être un autre administrateur actif de l\'établissement, avec un second facteur activé.',
+  self_mfa_reset: 'Vous ne pouvez pas réinitialiser votre propre second facteur depuis cette page.',
+  mfa_not_enrolled: 'Cet utilisateur n\'a aucun second facteur à réinitialiser.',
+  invalid_cidr: 'Saisissez une plage réseau valide, par exemple 203.0.113.0/24.',
+  cidr_too_broad: 'Cette plage réseau est trop large (au moins /24 en IPv4 et /48 en IPv6).',
+  cidr_reserved: 'Cette plage est réservée (réseau privé, partagé, local ou de documentation) : seule une adresse publique peut être déclarée de confiance.',
+  mfa_step_up_required: 'Saisissez le code à 6 chiffres de votre application d\'authentification pour confirmer cette opération.',
+  mfa_code_invalid: 'Code du second facteur invalide ou expiré.',
+  template_locked: 'Ce modèle de notification de sécurité ne peut pas être modifié.',
+  reason_required: 'Indiquez le motif (10 à 500 caractères).',
+  trusted_network_limit: 'Vous avez atteint la limite de 50 plages réseau de confiance.',
+  trusted_network_exists: 'Cette plage réseau est déjà déclarée.',
+  slug_reserved: 'Ce code établissement est réservé. Choisissez-en un autre.',
+  slug_taken: 'Ce code établissement est déjà utilisé. Choisissez-en un autre.',
 };
 
 const BY_STATUS: Readonly<Record<number, string>> = {
@@ -149,8 +175,32 @@ function describeWithDetails(error: ErrorLike, options: DescribeOptions): string
   return null;
 }
 
+const LOGIN_DELAY_MAX_SECONDS = 86_400;
+
+/** Secondes d'attente d'un 429 `login_delayed` (`details.retryAfterSeconds`) ; null si absent ou incohérent. */
+export function retryAfterSecondsOf(extras: Readonly<Record<string, unknown>> | undefined): number | null {
+  const value = detailsOf({ status: 0, code: '', extras }).retryAfterSeconds;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > LOGIN_DELAY_MAX_SECONDS) return null;
+  return Math.ceil(value);
+}
+
+/** Contexte établissement (docs/11 §14.1) : l'API précise si la demande vient d'une session hors réseau de confiance. */
+function describeTenantMfaEnrollment(offNetwork: boolean): string {
+  return offNetwork
+    ? 'Vous n\'êtes plus sur le réseau de l\'établissement : activez le second facteur pour continuer.'
+    : 'Activez le second facteur pour continuer.';
+}
+
+function describeLoginDelayed(extras: Readonly<Record<string, unknown>> | undefined): string {
+  const seconds = retryAfterSecondsOf(extras);
+  const base = 'Trop de tentatives pour ce compte.';
+  return seconds === null ? `${base} Réessayez dans quelques instants.` : `${base} Réessayez dans ${String(seconds)} seconde${seconds > 1 ? 's' : ''}.`;
+}
+
 /** Message lisible en français pour l'utilisateur ; ne divulgue jamais de détail technique. */
 export function describeApiError(error: ErrorLike, options: DescribeOptions = {}): string {
+  if (error.code === 'login_delayed') return describeLoginDelayed(error.extras);
+  if (error.code === 'mfa_enrollment_required' && typeof error.extras?.offNetwork === 'boolean') return describeTenantMfaEnrollment(error.extras.offNetwork);
   const detailed = describeWithDetails(error, options);
   if (detailed) return detailed;
   const byCode = BY_CODE[error.code];

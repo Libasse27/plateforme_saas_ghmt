@@ -87,7 +87,7 @@ describe('consentement du patient aux rappels', () => {
       expect(res.body.data.current[1]).toMatchObject({ channel: 'email', granted: false });
       expect(res.body.data.history).toEqual([expect.objectContaining({ channel: 'sms', granted: true, source: 'front_desk', purpose: 'appointment_reminder', id: expect.any(String), recordedAt: expect.any(String) })]);
       const audit = await app.get(TenantDb).runAs(a.tenantId, (tx) => tx.auditLog.findFirstOrThrow({ where: { action: 'patient.consent_changed', patientId: patient } }));
-      expect(audit.changes).toEqual({ channel: 'sms', purpose: 'appointment_reminder', granted: true, source: 'front_desk' });
+      expect(audit.changes).toEqual({ channel: 'sms', purpose: 'appointment_reminder', granted: true, source: 'front_desk', offNetwork: true });
       const stored = await app.get(TenantDb).runAs(a.tenantId, (tx) => tx.patientContactConsent.findFirstOrThrow({ where: { patientId: patient } }));
       expect(stored.recordedBy).toBe(receptionist.userId);
     });

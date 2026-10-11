@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { loginSchema, mfaVerifySchema, signupTenantSchema } from '@ghmt/shared';
 import { parseTokenPair } from '@/lib/api/refresh';
 import { isApiError } from '@/lib/api/errors';
+import { retryAfterSecondsOf } from '@/lib/api/messages';
 import { fieldErrorsFromZod, formDataToFlat, nestFlat, publicValues, safeNextPath, type FormState } from '@/lib/forms';
 import {
   clearMfaChallenge,
@@ -22,6 +23,21 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
 }
 
+/**
+ * Échec de connexion : `login_delayed` expose les secondes d'attente (compte à rebours du formulaire) et
+ * `email_verification_required` le code établissement (lien de renvoi de l'e-mail de vérification).
+ */
+function loginFailure(error: unknown, values: Record<string, string>, tenantSlug: string): FormState {
+  const state = failureState(error, values);
+  if (!isApiError(error)) return state;
+  if (error.code === 'login_delayed') {
+    const retryAfterSeconds = retryAfterSecondsOf(error.extras);
+    return retryAfterSeconds === null ? state : { ...state, extra: { retryAfterSeconds } };
+  }
+  if (error.code === 'email_verification_required') return { ...state, extra: { verificationTenant: tenantSlug } };
+  return state;
+}
+
 export async function loginAction(_prev: FormState, formData: FormData): Promise<FormState> {
   const flat = formDataToFlat(formData);
   const next = safeNextPath(flat.next);
@@ -35,7 +51,7 @@ export async function loginAction(_prev: FormState, formData: FormData): Promise
   try {
     data = asRecord((await publicRequest('/auth/login', { method: 'POST', body: parsed.data })).data);
   } catch (error) {
-    return failureState(error, values);
+    return loginFailure(error, values, parsed.data.tenantSlug);
   }
 
   const pair = parseTokenPair(data);
@@ -94,7 +110,8 @@ export async function signupAction(_prev: FormState, formData: FormData): Promis
   } catch (error) {
     return failureState(error, values);
   }
-  redirect(`/connexion?etablissement=${encodeURIComponent(parsed.data.establishment.slug)}&inscrit=1`);
+  // L'établissement est « en attente » : l'e-mail de l'administrateur doit être confirmé avant la première connexion.
+  redirect(`/inscription/verifier?etablissement=${encodeURIComponent(parsed.data.establishment.slug)}`);
 }
 
 /**

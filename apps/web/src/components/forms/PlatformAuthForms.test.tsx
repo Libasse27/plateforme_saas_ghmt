@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const platformLogin = vi.fn();
 vi.mock('@/actions/platform-auth', () => ({ platformLoginAction: (...args: unknown[]) => platformLogin(...args) }));
 vi.mock('@/actions/auth', () => ({ mfaVerifyAction: vi.fn() }));
-vi.mock('@/actions/mfa-setup', () => ({ startTotpSetupAction: vi.fn(), activateTotpAction: vi.fn() }));
+vi.mock('@/actions/mfa-setup', () => ({ startTotpSetupAction: vi.fn(), activateTotpAction: vi.fn(), sendMfaEmailCodeAction: vi.fn() }));
 
 import { MfaVerifyForm } from './MfaVerifyForm';
 import { PlatformLoginForm } from './PlatformLoginForm';

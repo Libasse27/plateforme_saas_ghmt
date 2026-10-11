@@ -18,9 +18,18 @@ export interface UserRow {
   readonly status: string;
   readonly locale: string;
   readonly lastLoginAt: Date | null;
+  readonly lastSeenAt: Date | null;
   readonly createdAt: Date;
   readonly credential?: { readonly mustChangePassword: boolean } | null;
+  /** Facteurs TOTP actifs (au plus un). */
+  readonly mfaFactors?: readonly { readonly id: string }[];
   readonly assignments?: readonly AssignmentRow[];
+}
+
+/** Données hors ligne utilisateur : administrateur principal (badge `isOwner`) et délai progressif de connexion en cours. */
+export interface UserViewContext {
+  readonly ownerUserId?: string | null;
+  readonly loginDelayed?: boolean;
 }
 
 export const ASSIGNMENT_SELECT = {
@@ -41,8 +50,10 @@ export const USER_SELECT = {
   status: true,
   locale: true,
   lastLoginAt: true,
+  lastSeenAt: true,
   createdAt: true,
   credential: { select: { mustChangePassword: true } },
+  mfaFactors: { where: { kind: 'totp', activatedAt: { not: null } }, select: { id: true } },
 } as const;
 
 export function toAssignmentDto(row: AssignmentRow) {
@@ -59,7 +70,9 @@ export function toAssignmentDto(row: AssignmentRow) {
   };
 }
 
-export function toUserDto(row: UserRow) {
+/** `isOwner` (docs/11 D9), `mfaEnrolled` et `loginDelayed` (docs/11 §14.1). */
+export function toUserDto(row: UserRow, context: UserViewContext = {}) {
+  const ownerUserId = context.ownerUserId ?? null;
   return {
     id: row.id,
     email: row.email,
@@ -68,12 +81,16 @@ export function toUserDto(row: UserRow) {
     locale: row.locale,
     mustChangePassword: row.credential?.mustChangePassword ?? false,
     lastLoginAt: row.lastLoginAt?.toISOString() ?? null,
+    lastSeenAt: row.lastSeenAt?.toISOString() ?? null,
+    isOwner: ownerUserId !== null && row.id === ownerUserId,
+    mfaEnrolled: (row.mfaFactors?.length ?? 0) > 0,
+    loginDelayed: context.loginDelayed ?? false,
     createdAt: row.createdAt.toISOString(),
   };
 }
 
-export function toUserDetailDto(row: UserRow) {
-  return { ...toUserDto(row), assignments: (row.assignments ?? []).map(toAssignmentDto) };
+export function toUserDetailDto(row: UserRow, context: UserViewContext = {}) {
+  return { ...toUserDto(row, context), assignments: (row.assignments ?? []).map(toAssignmentDto) };
 }
 
 export interface RoleRow {

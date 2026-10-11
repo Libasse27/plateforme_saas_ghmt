@@ -1,5 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
+import { TenantDb } from '../../src/infrastructure/prisma/tenant-db.service';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTenantFixture, createUserWithRole, issueToken, type TenantFixture, type UserFixture } from '../helpers/fixtures';
 import { acceptInvitationFor } from '../helpers/invitations';
@@ -254,13 +255,18 @@ describe('iam : affectations, anti-escalade et dernier administrateur (HTTP)', (
 
       const res = await http().delete(`${BASE}/${a.adminUserId}/assignments/${adminAssignments.body.data[0].id}`).set(bearer(delegate.token)).expect(403);
 
-      expect(res.body.code).toBe('privilege_escalation');
+      // La hiérarchie (docs/11 D9) précède l'anti-escalade : le délégué (rang 1) ne peut rien contre le principal.
+      expect(res.body.code).toBe('admin_hierarchy');
     });
   });
 
-  describe('invariant : dernier administrateur actif (409 last_admin)', () => {
-    it('empêche le seul administrateur de se désactiver ou de perdre son rôle', async () => {
+  describe('invariant : dernier administrateur actif (409 last_admin) et administrateur principal (409 owner_must_transfer)', () => {
+    /** Supprime le principal désigné : on isole l'invariant « dernier administrateur », antérieur à la hiérarchie. */
+    const dropOwner = (t: TenantFixture) => app.get(TenantDb).runAs(t.tenantId, (tx) => tx.securitySettings.deleteMany({}));
+
+    it('empêche le seul administrateur de se désactiver ou de perdre son rôle (last_admin)', async () => {
       const solo = await createTenantFixture(app, { prefix: 'asg-solo' });
+      await dropOwner(solo);
       const assignments = await http().get(`${BASE}/${solo.adminUserId}/assignments`).set(bearer(solo.adminToken)).expect(200);
 
       const disable = await http().post(`${BASE}/${solo.adminUserId}/disable`).set(bearer(solo.adminToken)).expect(409);
@@ -271,7 +277,18 @@ describe('iam : affectations, anti-escalade et dernier administrateur (HTTP)', (
       await http().get('/api/v1/org/sites').set(bearer(solo.adminToken)).expect(200);
     });
 
-    it('autorise le retrait d’un administrateur tant qu’un autre administrateur actif subsiste, puis protège le dernier', async () => {
+    it('le principal, même seul, doit d’abord transférer son titre (owner_must_transfer)', async () => {
+      const solo = await createTenantFixture(app, { prefix: 'asg-owner' });
+      const assignments = await http().get(`${BASE}/${solo.adminUserId}/assignments`).set(bearer(solo.adminToken)).expect(200);
+
+      const disable = await http().post(`${BASE}/${solo.adminUserId}/disable`).set(bearer(solo.adminToken)).expect(409);
+      const revoke = await http().delete(`${BASE}/${solo.adminUserId}/assignments/${assignments.body.data[0].id}`).set(bearer(solo.adminToken)).expect(409);
+
+      expect(disable.body.code).toBe('owner_must_transfer');
+      expect(revoke.body.code).toBe('owner_must_transfer');
+    });
+
+    it('autorise le retrait d’un administrateur par le principal tant qu’il reste un administrateur actif', async () => {
       const t = await createTenantFixture(app, { prefix: 'asg-duo' });
       const adminRoleId = await roleIdByCode(app, t, 'tenant_admin');
       counter += 1;
@@ -281,13 +298,11 @@ describe('iam : affectations, anti-escalade et dernier administrateur (HTTP)', (
         .send({ fullName: 'Second Admin', email: `second${counter}@${t.slug}.test`, roleAssignments: [{ roleId: adminRoleId, scopeType: 'tenant' }] })
         .expect(201);
       await acceptInvitationFor(app, `second${counter}@${t.slug}.test`);
-      const secondToken = await issueToken(app, t.tenantId, second.body.data.id);
 
-      await http().post(`${BASE}/${t.adminUserId}/disable`).set(bearer(secondToken)).expect(200);
+      await http().post(`${BASE}/${second.body.data.id}/disable`).set(bearer(t.adminToken)).expect(200);
 
-      const last = await http().post(`${BASE}/${second.body.data.id}/disable`).set(bearer(secondToken)).expect(409);
-      expect(last.body.code).toBe('last_admin');
-      await http().get(`${BASE}/${t.adminUserId}`).set(bearer(secondToken)).expect(200);
+      const last = await http().post(`${BASE}/${t.adminUserId}/disable`).set(bearer(t.adminToken)).expect(409);
+      expect(last.body.code).toBe('owner_must_transfer');
     });
 
     it('compte la désactivation d’un administrateur comme une perte (le second administrateur désactivé ne compte pas)', async () => {
@@ -301,6 +316,7 @@ describe('iam : affectations, anti-escalade et dernier administrateur (HTTP)', (
         .expect(201);
       await acceptInvitationFor(app, `trio${counter}@${t.slug}.test`);
       await http().post(`${BASE}/${second.body.data.id}/disable`).set(bearer(t.adminToken)).expect(200);
+      await dropOwner(t);
 
       const res = await http().post(`${BASE}/${t.adminUserId}/disable`).set(bearer(t.adminToken)).expect(409);
 

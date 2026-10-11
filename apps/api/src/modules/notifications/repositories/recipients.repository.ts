@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { DIRECTOR_ROLE } from '../../../common/authz/director-role';
 import type { Patient, User } from '../../../generated/prisma/client';
 import type { TenantTx } from '../../../infrastructure/prisma/tenant-db.service';
 
@@ -24,7 +25,7 @@ export class RecipientsRepository {
    * établissement ; à partir de J+7, aussi les titulaires du rôle système `director`.
    */
   async findOwners(tx: TenantTx, tenantId: string, now: Date, includeDirectors: boolean): Promise<UserRecipient[]> {
-    const roleFilters = [{ permissions: { some: { permissionCode: OWNER_PERMISSION } } }, ...(includeDirectors ? [{ isSystem: true, templateCode: 'director' }] : [])];
+    const roleFilters = [{ permissions: { some: { permissionCode: OWNER_PERMISSION } } }, ...(includeDirectors ? [DIRECTOR_ROLE] : [])];
     const users = await tx.user.findMany({
       where: {
         tenantId,
@@ -44,6 +45,58 @@ export class RecipientsRepository {
       orderBy: { id: 'asc' },
     });
     return users;
+  }
+
+  /**
+   * Directeurs (docs/11 D10) : utilisateurs actifs titulaires du rôle système `director` à portée établissement,
+   * affectation valide à l'instant `now`.
+   */
+  async findDirectors(tx: TenantTx, tenantId: string, now: Date): Promise<UserRecipient[]> {
+    return tx.user.findMany({
+      where: {
+        tenantId,
+        deletedAt: null,
+        status: 'active',
+        assignments: {
+          some: {
+            scopeType: 'tenant',
+            revokedAt: null,
+            validFrom: { lte: now },
+            OR: [{ validUntil: null }, { validUntil: { gt: now } }],
+            role: { deletedAt: null, ...DIRECTOR_ROLE },
+          },
+        },
+      },
+      select: { id: true, locale: true },
+      orderBy: { id: 'asc' },
+    });
+  }
+
+  /** Administrateurs actifs (rôle système `tenant_admin` à portée établissement, affectation valide). */
+  async findAdministrators(tx: TenantTx, tenantId: string, now: Date): Promise<UserRecipient[]> {
+    return tx.user.findMany({
+      where: {
+        tenantId,
+        deletedAt: null,
+        status: 'active',
+        assignments: {
+          some: {
+            scopeType: 'tenant',
+            revokedAt: null,
+            validFrom: { lte: now },
+            OR: [{ validUntil: null }, { validUntil: { gt: now } }],
+            role: { deletedAt: null, isSystem: true, templateCode: 'tenant_admin' },
+          },
+        },
+      },
+      select: { id: true, locale: true },
+      orderBy: { id: 'asc' },
+    });
+  }
+
+  /** Utilisateur actif (destinataire de repli : l'administrateur principal). */
+  async findActiveUser(tx: TenantTx, tenantId: string, id: string): Promise<UserRecipient | null> {
+    return tx.user.findFirst({ where: { tenantId, id, deletedAt: null, status: 'active' }, select: { id: true, locale: true } });
   }
 
   /** Préférences d'un utilisateur (absente = activée). */

@@ -10,7 +10,7 @@ const everyCombination = NOTIFICATION_TYPE_CODES.flatMap((typeCode) =>
 
 describe('modèles par défaut', () => {
   it('couvrent chaque type × canal × langue du catalogue, une seule fois', () => {
-    expect(everyCombination).toHaveLength(40);
+    expect(everyCombination).toHaveLength(68);
     expect(DEFAULT_TEMPLATES).toHaveLength(everyCombination.length);
     for (const combination of everyCombination) {
       expect(DEFAULT_TEMPLATES.filter((t) => t.typeCode === combination.typeCode && t.channel === combination.channel && t.locale === combination.locale)).toHaveLength(1);

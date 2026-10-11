@@ -5,6 +5,8 @@ import { RequestContext } from '../../../common/context/request-context';
 import { DomainError } from '../../../common/errors/domain-error';
 import { TenantDb, type TenantTx } from '../../../infrastructure/prisma/tenant-db.service';
 import { ROLE_SELECT, toRoleDetailDto, toRoleDto } from '../mappers/iam.mappers';
+import { assertCanEditRolePermissions } from './admin-hierarchy';
+import { HierarchyService } from './hierarchy.service';
 import { assertNoEscalation } from './privilege';
 
 export interface PermissionDto {
@@ -25,6 +27,7 @@ export class RolesService {
     private readonly tenantDb: TenantDb,
     private readonly audit: AuditService,
     private readonly context: RequestContext,
+    private readonly hierarchy: HierarchyService,
   ) {}
 
   async list() {
@@ -59,6 +62,7 @@ export class RolesService {
     const principal = this.context.requirePrincipal();
     assertNoEscalation(this.context.grants, input.permissions);
     return this.tenantDb.run(async (tx) => {
+      assertCanEditRolePermissions(await this.hierarchy.actorRank(tx), { isNew: true, assigned: false, before: [], after: input.permissions });
       const existing = await tx.role.findFirst({ where: { code: input.code }, select: { id: true } });
       if (existing) throw DomainError.conflict('role_code_conflict', 'Ce code de rôle est déjà utilisé.');
 
@@ -86,12 +90,15 @@ export class RolesService {
   async update(id: string, input: UpdateRoleInput) {
     const principal = this.context.requirePrincipal();
     return this.tenantDb.run(async (tx) => {
+      // Verrou de la ligne AVANT de lire titulaires et droits : une affectation concurrente (FOR SHARE) attend ou est vue.
+      await tx.$queryRaw`SELECT id FROM tenant.roles WHERE id = ${id}::uuid FOR UPDATE`;
       const before = await this.requireRole(tx, id);
       if (before.isSystem) throw DomainError.conflict('system_role_immutable', 'Un rôle système n’est pas modifiable.');
 
       const currentPermissions = before.permissions.map((p) => p.permissionCode);
       // L'acteur doit détenir les droits actuels (sinon il pourrait en priver un rôle puissant) et les nouveaux.
       assertNoEscalation(this.context.grants, [...currentPermissions, ...(input.permissions ?? [])]);
+      if (input.permissions) await this.assertCanChangeHolders(tx, id, currentPermissions, input.permissions);
 
       await tx.role.update({
         where: { tenantId_id: { tenantId: principal.tenantId, id } },
@@ -139,6 +146,17 @@ export class RolesService {
         changes: { before: { code: role.code, name: role.name } },
       });
     });
+  }
+
+  /**
+   * H3 (docs/11 §14.1) : modifier les droits d'un rôle agit sur tous ses titulaires. Ajouter un droit d'administration en
+   * écriture à un rôle affecté est réservé au principal (`owner_required`), et l'acteur doit pouvoir gérer chaque titulaire
+   * (`admin_hierarchy`).
+   */
+  private async assertCanChangeHolders(tx: TenantTx, roleId: string, before: readonly string[], after: readonly string[]): Promise<void> {
+    const holders = await tx.userRoleAssignment.findMany({ where: { roleId, revokedAt: null }, distinct: ['userId'], select: { userId: true } });
+    assertCanEditRolePermissions(await this.hierarchy.actorRank(tx), { assigned: holders.length > 0, before, after });
+    for (const holder of holders) await this.hierarchy.assertCanManageUser(tx, holder.userId);
   }
 
   private async replacePermissions(tx: TenantTx, tenantId: string, roleId: string, permissions: readonly string[]): Promise<void> {

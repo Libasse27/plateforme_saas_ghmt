@@ -36,6 +36,7 @@ import { PreferencesService } from './services/preferences.service';
 import { QuotaAlertService } from './services/quota-alert.service';
 import { RecipientHasher } from './services/recipient-hasher';
 import { SaasPaymentSubscriber } from './services/saas-payment.subscriber';
+import { SecurityAlertService } from './services/security-alert.service';
 import { SettingsService } from './services/settings.service';
 import { SmsQuotaService } from './services/sms-quota.service';
 import { SmsStopService } from './services/sms-stop.service';
@@ -62,6 +63,7 @@ const DELIVERY_PIPELINE = [
   QuotaAlertService,
   RecipientHasher,
   SaasPaymentSubscriber,
+  SecurityAlertService,
   SettingsService,
   SmsQuotaService,
   SmsRecipientRegistry,
@@ -82,6 +84,6 @@ const JOBS = [NotificationRetentionJob, ReminderSweeperJob, SaasDunningJob];
     ...DELIVERY_PIPELINE,
     ...JOBS,
   ],
-  exports: [NotificationDispatcher],
+  exports: [NotificationDispatcher, SecurityAlertService],
 })
 export class NotificationsModule {}

@@ -10,8 +10,9 @@ import { cookieTokenStore } from '@/lib/session/store';
 type SessionRequest = Omit<RequestOptions, 'accessToken'>;
 
 /**
- * C9 : l'IP du client final est lue sur la requête entrante (x-forwarded-for du proxy amont,
- * sinon x-real-ip), jamais fournie par le navigateur, puis transmise à l'API.
+ * C9 : l'IP du client final est lue sur la requête entrante : entrée `length - TRUSTED_PROXY_HOPS` de
+ * x-forwarded-for, uniquement si le secret de bordure (EDGE_PROXY_SECRET) est valide (docs/11 D11). `x-real-ip`
+ * n'est plus lu. Jamais fournie par le navigateur, puis transmise à l'API.
  */
 export async function apiDeps(): Promise<ClientDeps> {
   return { baseUrl: getApiUrl(), clientInfo: extractClientInfo(await headers()) };

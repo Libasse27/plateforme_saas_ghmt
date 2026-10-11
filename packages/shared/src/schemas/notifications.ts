@@ -46,6 +46,10 @@ export type SmsProviderName = (typeof SMS_PROVIDERS)[number];
 // ───────── Catalogue figé des types (docs/10 §7.1) ─────────
 const APPOINTMENT_VARIABLES = ['etablissement.nom', 'site.nom', 'patient.prenom', 'rdv.date', 'rdv.heure'] as const;
 const INVOICE_VARIABLES = ['etablissement.nom', 'facture.numero', 'facture.montant', 'facture.echeance', 'facture.jours_retard', 'lien'] as const;
+const SECURITY_VARIABLES = ['etablissement.nom', 'utilisateur.nom', 'role.nom', 'portee.type', 'acteur.nom', 'lien'] as const;
+/** Alertes de sécurité d'établissement (docs/11 §14.1) : textes fixes, seuls l'acteur, la personne visée et le lien varient. */
+const SECURITY_ALERT_VARIABLES = ['etablissement.nom', 'utilisateur.nom', 'acteur.nom', 'lien'] as const;
+const securityAlert = (): NotificationTypeDefinition => ({ category: 'administrative', recipient: 'user', channels: ['email', 'inapp'], variables: SECURITY_ALERT_VARIABLES });
 const QUOTA_VARIABLES = ['etablissement.nom', 'quota.pourcentage', 'quota.limite', 'lien'] as const;
 
 export interface NotificationTypeDefinition {
@@ -80,6 +84,13 @@ export const NOTIFICATION_TYPES = {
   'subscription.payment_overdue': invoiceType,
   'subscription.suspension_notice': invoiceType,
   'quota.sms_threshold': { category: 'administrative', recipient: 'user', channels: ['email', 'inapp'], variables: QUOTA_VARIABLES },
+  'security.sensitive_role_assigned': { category: 'administrative', recipient: 'user', channels: ['email', 'inapp'], variables: SECURITY_VARIABLES },
+  'security.trusted_network_changed': securityAlert(),
+  'security.policy_changed': securityAlert(),
+  'security.mfa_reset': securityAlert(),
+  'security.owner_transferred': securityAlert(),
+  'security.director_removed': securityAlert(),
+  'security.login_delay_alert': securityAlert(),
 } as const satisfies Record<string, NotificationTypeDefinition>;
 
 export type NotificationTypeCode = keyof typeof NOTIFICATION_TYPES;

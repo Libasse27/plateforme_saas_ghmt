@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { EffectiveGrant } from '../../../common/authz/authorization.types';
 import { DomainError } from '../../../common/errors/domain-error';
-import { assertCanAssign, assertNoEscalation, grantCovers, isDelegableSystemRole, isSensitiveRole, missingPermissions } from './privilege';
+import { CLINICAL_PERMISSION_MODULES } from '@ghmt/shared';
+import { SENSITIVE_ROLE_MODULES, assertCanAssign, assertNoEscalation, grantCovers, isDelegableSystemRole, isSensitiveRole, missingPermissions } from './privilege';
 
 const SITE_A = '0198a000-0000-7000-8000-00000000000a';
 const SITE_B = '0198a000-0000-7000-8000-00000000000b';
@@ -131,5 +132,19 @@ describe('isSensitiveRole (H2)', () => {
   it('ne signale pas un rôle administratif ou d’accueil', () => {
     expect(isSensitiveRole([])).toBe(false);
     expect(isSensitiveRole(['iam:user:create', 'org:site:read', 'patients:patient:read', 'appointments:appointment:create', 'billing:invoice:read'])).toBe(false);
+  });
+
+  it('couvre tous les modules cliniques (H5 : inclusion de CLINICAL_PERMISSION_MODULES)', () => {
+    for (const module of CLINICAL_PERMISSION_MODULES) {
+      expect(SENSITIVE_ROLE_MODULES.has(module), module).toBe(true);
+      expect(isSensitiveRole([`${module}:any:read`]), module).toBe(true);
+    }
+    expect(isSensitiveRole(['inpatient:admission:read'])).toBe(true);
+  });
+
+  it('signale les exports du dossier patient (patients:*:export)', () => {
+    expect(isSensitiveRole(['patients:patient:export'])).toBe(true);
+    expect(isSensitiveRole(['patients:document:export'])).toBe(true);
+    expect(isSensitiveRole(['patients:patient:read', 'patients:patient:create'])).toBe(false);
   });
 });

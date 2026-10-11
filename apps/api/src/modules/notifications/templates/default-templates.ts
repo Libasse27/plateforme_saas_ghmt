@@ -86,9 +86,40 @@ const QUOTA: readonly DefaultTemplate[] = [
   t('quota.sms_threshold', 'email', 'en', 'SMS quota reached at {{quota.pourcentage}}%', `Hello,\n\n{{etablissement.nom}} has used {{quota.pourcentage}}% of its monthly SMS quota (limit: {{quota.limite}} segments). Beyond it, SMS are replaced by e-mails when possible.\n\nManage the subscription: {{lien}}`),
   t('quota.sms_threshold', 'inapp', 'fr', 'Quota SMS à {{quota.pourcentage}} %', 'Limite mensuelle : {{quota.limite}} segments.'),
   t('quota.sms_threshold', 'inapp', 'en', 'SMS quota at {{quota.pourcentage}}%', 'Monthly limit: {{quota.limite}} segments.'),
+  t('security.sensitive_role_assigned', 'email', 'fr', 'Nouveau rôle sensible attribué : {{role.nom}}', `Bonjour,\n\n{{acteur.nom}} a attribué le rôle « {{role.nom}} » à {{utilisateur.nom}} ({{portee.type}}) sur {{etablissement.nom}}.\n\nSi cette attribution n'est pas attendue, vérifiez-la : {{lien}}`),
+  t('security.sensitive_role_assigned', 'email', 'en', 'Sensitive role assigned: {{role.nom}}', `Hello,\n\n{{acteur.nom}} has assigned the role "{{role.nom}}" to {{utilisateur.nom}} ({{portee.type}}) at {{etablissement.nom}}.\n\nIf this assignment is unexpected, please review it: {{lien}}`),
+  t('security.sensitive_role_assigned', 'inapp', 'fr', 'Rôle sensible attribué', '{{acteur.nom}} a attribué « {{role.nom}} » à {{utilisateur.nom}} ({{portee.type}}).'),
+  t('security.sensitive_role_assigned', 'inapp', 'en', 'Sensitive role assigned', '{{acteur.nom}} assigned "{{role.nom}}" to {{utilisateur.nom}} ({{portee.type}}).'),
 ];
 
-export const DEFAULT_TEMPLATES: readonly DefaultTemplate[] = [...APPOINTMENT_SMS, ...APPOINTMENT_EMAIL, ...SUBSCRIPTION_EMAIL, ...SUBSCRIPTION_INAPP, ...QUOTA];
+const SECURITY_ALERTS: readonly DefaultTemplate[] = [
+  t('security.trusted_network_changed', 'email', 'fr', 'Réseaux de confiance modifiés', `Bonjour,\n\n{{acteur.nom}} a modifié la liste des réseaux de confiance de {{etablissement.nom}}. Si ce changement n'est pas attendu, vérifiez-le : {{lien}}`),
+  t('security.trusted_network_changed', 'email', 'en', 'Trusted networks changed', `Hello,\n\n{{acteur.nom}} has changed the list of trusted networks of {{etablissement.nom}}. If this change is unexpected, please review it: {{lien}}`),
+  t('security.trusted_network_changed', 'inapp', 'fr', 'Réseaux de confiance modifiés', 'Modification faite par {{acteur.nom}}.'),
+  t('security.trusted_network_changed', 'inapp', 'en', 'Trusted networks changed', 'Change made by {{acteur.nom}}.'),
+  t('security.policy_changed', 'email', 'fr', 'Politique de sécurité modifiée', `Bonjour,\n\n{{acteur.nom}} a modifié la politique de sécurité de {{etablissement.nom}}. Si ce changement n'est pas attendu, vérifiez-le : {{lien}}`),
+  t('security.policy_changed', 'email', 'en', 'Security policy changed', `Hello,\n\n{{acteur.nom}} has changed the security policy of {{etablissement.nom}}. If this change is unexpected, please review it: {{lien}}`),
+  t('security.policy_changed', 'inapp', 'fr', 'Politique de sécurité modifiée', 'Modification faite par {{acteur.nom}}.'),
+  t('security.policy_changed', 'inapp', 'en', 'Security policy changed', 'Change made by {{acteur.nom}}.'),
+  t('security.mfa_reset', 'email', 'fr', 'Second facteur réinitialisé', `Bonjour,\n\n{{acteur.nom}} a réinitialisé le second facteur de {{utilisateur.nom}} sur {{etablissement.nom}}. Vérifiez que cette opération est attendue : {{lien}}`),
+  t('security.mfa_reset', 'email', 'en', 'Second factor reset', `Hello,\n\n{{acteur.nom}} has reset the second factor of {{utilisateur.nom}} at {{etablissement.nom}}. Please check that this operation is expected: {{lien}}`),
+  t('security.mfa_reset', 'inapp', 'fr', 'Second facteur réinitialisé', '{{acteur.nom}} a réinitialisé le second facteur de {{utilisateur.nom}}.'),
+  t('security.mfa_reset', 'inapp', 'en', 'Second factor reset', '{{acteur.nom}} reset the second factor of {{utilisateur.nom}}.'),
+  t('security.owner_transferred', 'email', 'fr', 'Administrateur principal modifié', `Bonjour,\n\n{{acteur.nom}} a transféré le titre d'administrateur principal de {{etablissement.nom}} à {{utilisateur.nom}}. Si ce transfert n'est pas attendu, contactez immédiatement votre support : {{lien}}`),
+  t('security.owner_transferred', 'email', 'en', 'Primary administrator changed', `Hello,\n\n{{acteur.nom}} has transferred the primary administrator title of {{etablissement.nom}} to {{utilisateur.nom}}. If this transfer is unexpected, contact support immediately: {{lien}}`),
+  t('security.owner_transferred', 'inapp', 'fr', 'Administrateur principal modifié', '{{acteur.nom}} a transféré le titre à {{utilisateur.nom}}.'),
+  t('security.owner_transferred', 'inapp', 'en', 'Primary administrator changed', '{{acteur.nom}} transferred the title to {{utilisateur.nom}}.'),
+  t('security.director_removed', 'email', 'fr', 'Directeur retiré', `Bonjour,\n\n{{utilisateur.nom}} n'est plus directeur de {{etablissement.nom}} (opération faite par {{acteur.nom}}). Vérifiez que cette opération est attendue : {{lien}}`),
+  t('security.director_removed', 'email', 'en', 'Director removed', `Hello,\n\n{{utilisateur.nom}} is no longer a director of {{etablissement.nom}} (operation by {{acteur.nom}}). Please check that this operation is expected: {{lien}}`),
+  t('security.director_removed', 'inapp', 'fr', 'Directeur retiré', '{{utilisateur.nom}} n’est plus directeur (par {{acteur.nom}}).'),
+  t('security.director_removed', 'inapp', 'en', 'Director removed', '{{utilisateur.nom}} is no longer a director (by {{acteur.nom}}).'),
+  t('security.login_delay_alert', 'email', 'fr', 'Connexion ralentie sur un compte', `Bonjour,\n\nPlusieurs tentatives de connexion échouées visent le compte de {{utilisateur.nom}} sur {{etablissement.nom}} : les nouvelles tentatives sont ralenties (jusqu'à 15 minutes). Vous pouvez lever ce délai depuis la fiche de l'utilisateur : {{lien}}`),
+  t('security.login_delay_alert', 'email', 'en', 'Sign-in slowed on an account', `Hello,\n\nSeveral failed sign-in attempts target the account of {{utilisateur.nom}} at {{etablissement.nom}}: new attempts are slowed down (up to 15 minutes). You can lift this delay from the user page: {{lien}}`),
+  t('security.login_delay_alert', 'inapp', 'fr', 'Connexion ralentie', 'Compte de {{utilisateur.nom}} : tentatives échouées répétées.'),
+  t('security.login_delay_alert', 'inapp', 'en', 'Sign-in slowed', 'Account of {{utilisateur.nom}}: repeated failed attempts.'),
+];
+
+export const DEFAULT_TEMPLATES: readonly DefaultTemplate[] = [...APPOINTMENT_SMS, ...APPOINTMENT_EMAIL, ...SUBSCRIPTION_EMAIL, ...SUBSCRIPTION_INAPP, ...QUOTA, ...SECURITY_ALERTS];
 
 const FALLBACK_LOCALE: NotificationLocale = 'fr';
 

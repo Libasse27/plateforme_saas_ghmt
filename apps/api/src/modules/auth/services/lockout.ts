@@ -1,3 +1,4 @@
+/** Verrou dur du realm plateforme uniquement (docs/11 §1.3 : délai progressif des plateformes hors périmètre). */
 import type { TenantTx } from '../../../infrastructure/prisma/tenant-db.service';
 import { LOCKOUT_MINUTES, LOCKOUT_THRESHOLD, MINUTE } from '../auth.constants';
 

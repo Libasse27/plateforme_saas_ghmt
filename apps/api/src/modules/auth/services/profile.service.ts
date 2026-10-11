@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import type { MeResponse } from '@ghmt/shared';
+import { mfaRequiredFor } from '../../../common/authz/clinical-mfa';
 import { AuthorizationService } from '../../../common/authz/authorization.service';
-import type { Principal } from '../../../common/context/request-context';
+import { RequestContext, type Principal } from '../../../common/context/request-context';
 import { DomainError } from '../../../common/errors/domain-error';
 import { TenantDb } from '../../../infrastructure/prisma/tenant-db.service';
 import { loadTenantProfile } from '../../../infrastructure/tenancy/tenant-profile';
@@ -12,6 +13,7 @@ export class ProfileService {
   constructor(
     private readonly tenantDb: TenantDb,
     private readonly authz: AuthorizationService,
+    private readonly context: RequestContext,
   ) {}
 
   /** Profil, permissions effectives (codes), modules actifs et état MFA de l'utilisateur courant. */
@@ -30,10 +32,11 @@ export class ProfileService {
         },
       });
       if (!user) throw DomainError.unauthorized();
-      const [grants, tenant, profile] = await Promise.all([
+      const [grants, tenant, profile, network] = await Promise.all([
         this.authz.loadGrants(tx, userId),
         this.authz.loadTenantModules(tx),
         loadTenantProfile(tx),
+        this.authz.loadNetworkPolicy(tx, this.context.state?.ip),
       ]);
       return {
         user: {
@@ -49,7 +52,8 @@ export class ProfileService {
         mfa: {
           enrolled: user.mfaFactors.length > 0,
           verified: principal.mfa,
-          required: grants.some((g) => g.mfaRequired),
+          // Même règle que la connexion et le guard, évaluée pour l'IP de CETTE requête (docs/11 D6).
+          required: mfaRequiredFor({ grants, mode: network.mode, networkTrusted: network.networkTrusted }),
         },
       };
     });

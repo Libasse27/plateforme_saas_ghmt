@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appointmentVariables, formatAmount, formatLongDate, invoiceVariables, quotaVariables } from './message-variables';
+import { appointmentVariables, formatAmount, formatLongDate, invoiceVariables, quotaVariables, securityLinkPath, securityUserPath, securityVariables } from './message-variables';
 
 describe('formatAmount', () => {
   it('groupe les milliers et retire les décimales nulles', () => {
@@ -97,5 +97,60 @@ describe('noms affichés : repli quand un terme interdit s’y glisse', () => {
 
     expect(values['etablissement.nom']).toBe('Clinique A.');
     expect(values['site.nom']).toBe('Site Nord');
+  });
+});
+
+describe('securityVariables', () => {
+  const context = { targetUserId: 'u-1', targetName: 'Awa Diop', roleName: 'Médecin', scopeType: 'site' as const, actorName: 'Admin Test' };
+  const facts = { tenantName: 'Clinique Awa', senderDisplayName: null, webUrl: 'https://app.ghmt.example/', locale: 'fr' as const };
+
+  it('renseigne les variables du contrat et le lien vers la fiche utilisateur', () => {
+    expect(securityVariables(context, facts)).toEqual({
+      'etablissement.nom': 'Clinique Awa',
+      'utilisateur.nom': 'Awa Diop',
+      'role.nom': 'Médecin',
+      'portee.type': 'un site',
+      'acteur.nom': 'Admin Test',
+      lien: 'https://app.ghmt.example/administration/utilisateurs/u-1',
+    });
+    expect(securityUserPath('u-1')).toBe('/administration/utilisateurs/u-1');
+  });
+
+  it('exprime uniquement le type de portée, en français et en anglais', () => {
+    expect(securityVariables({ ...context, scopeType: 'tenant' }, facts)['portee.type']).toBe('l’établissement');
+    expect(securityVariables({ ...context, scopeType: 'department' }, facts)['portee.type']).toBe('un service');
+    expect(securityVariables({ ...context, scopeType: 'department' }, { ...facts, locale: 'en' })['portee.type']).toBe('a department');
+  });
+});
+
+describe('alertes de sécurité d’établissement', () => {
+  const facts = { tenantName: 'Clinique Awa', senderDisplayName: null, webUrl: 'https://app.ghmt.example', locale: 'fr' as const };
+
+  it('renvoie vers la console de sécurité pour les réseaux et la politique', () => {
+    for (const typeCode of ['security.trusted_network_changed', 'security.policy_changed']) {
+      expect(securityLinkPath(typeCode, { targetUserId: 'u-1' })).toBe('/administration/securite');
+      expect(securityVariables({ actorName: 'Admin' }, { ...facts, typeCode }).lien).toBe('https://app.ghmt.example/administration/securite');
+    }
+  });
+
+  it('renvoie vers la fiche de la personne visée pour les autres types, à défaut vers la console', () => {
+    expect(securityLinkPath('security.mfa_reset', { targetUserId: 'u-9' })).toBe('/administration/utilisateurs/u-9');
+    expect(securityLinkPath('security.owner_transferred', {})).toBe('/administration/securite');
+  });
+
+  it('tolère un contexte partiel (champs absents ⇒ chaînes vides)', () => {
+    expect(securityVariables({ actorName: 'Admin' }, { ...facts, typeCode: 'security.policy_changed' })).toMatchObject({ 'acteur.nom': 'Admin', 'utilisateur.nom': '', 'role.nom': '' });
+  });
+});
+
+describe('securityVariables : alerte de délai de connexion (security.login_delay_alert)', () => {
+  it('rend le nom de la personne visée et le lien vers sa fiche (contexte de establishmentAlert)', () => {
+    const values = securityVariables(
+      { targetUserId: 'u-9', targetName: 'Moussa Ndiaye', actorName: '' },
+      { tenantName: 'Clinique Awa', senderDisplayName: null, webUrl: 'https://app.ghmt.example/', locale: 'fr', typeCode: 'security.login_delay_alert' },
+    );
+
+    expect(values['utilisateur.nom']).toBe('Moussa Ndiaye');
+    expect(values.lien).toBe('https://app.ghmt.example/administration/utilisateurs/u-9');
   });
 });

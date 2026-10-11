@@ -83,6 +83,10 @@ describe('decideEarly', () => {
       expect(decideEarly({ ...admin, typeCode: 'subscription.payment_overdue', emailPreferenceEnabled: false })).toBeNull();
     });
 
+    it('ignore la préférence pour les alertes de sécurité (security.*)', () => {
+      expect(decideEarly({ ...admin, typeCode: 'security.sensitive_role_assigned', emailPreferenceEnabled: false })).toBeNull();
+    });
+
     it('ne s’applique pas à l’in-app (toujours actif)', () => {
       expect(decideEarly({ ...admin, channel: 'inapp', emailPreferenceEnabled: false })).toBeNull();
     });

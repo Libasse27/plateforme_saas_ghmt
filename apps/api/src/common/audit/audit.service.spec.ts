@@ -39,3 +39,32 @@ describe('AuditService.record (A7)', () => {
     expect(create).not.toHaveBeenCalled();
   });
 });
+
+describe('AuditService.record — lectures cliniques hors réseau (docs/11 §14.2.11)', () => {
+  const PATIENT = '0197a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c';
+  const withNetwork = (networkTrusted: boolean | undefined) =>
+    ({ principal: undefined, state: { requestId: 'req-12345678', ip: '41.82.210.4', networkTrusted } }) as unknown as RequestContext;
+
+  async function changesFor(networkTrusted: boolean | undefined, event: Parameters<AuditService['record']>[2]) {
+    const { tx, create } = fakeTx(1n, null);
+    await new AuditService(withNetwork(networkTrusted)).record(tx, TENANT, event);
+    return create.mock.calls[0]![0].data.changes;
+  }
+
+  it('marque offNetwork sur un événement patient émis hors réseau de confiance', async () => {
+    expect(await changesFor(false, { action: 'patients.patient.read', patientId: PATIENT })).toEqual({ offNetwork: true });
+  });
+
+  it('marque offNetwork sur une lecture groupée (patientIds) hors réseau', async () => {
+    expect(await changesFor(false, { action: 'patients.patient.search', patientIds: [PATIENT] })).toEqual({ patientIds: [PATIENT], offNetwork: true });
+  });
+
+  it('ne marque rien sur réseau de confiance ni quand le réseau n’a pas été évalué', async () => {
+    expect(await changesFor(true, { action: 'patients.patient.read', patientId: PATIENT })).toBeUndefined();
+    expect(await changesFor(undefined, { action: 'patients.patient.read', patientId: PATIENT })).toBeUndefined();
+  });
+
+  it('ne marque rien sur un événement sans patient, même hors réseau', async () => {
+    expect(await changesFor(false, { action: 'iam.user.updated', changes: { fullName: 'x' } })).toEqual({ fullName: 'x' });
+  });
+});

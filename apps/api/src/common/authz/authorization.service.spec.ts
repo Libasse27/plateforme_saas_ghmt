@@ -16,6 +16,8 @@ const base: AuthorizationInput = {
   enabledModules: new Set(['patients', 'appointments']),
   tenantStatus: 'active',
   mfaVerified: false,
+  networkTrusted: true,
+  clinicalMfaMode: 'off_network',
 };
 
 describe('evaluateAuthorization', () => {
@@ -130,6 +132,42 @@ describe('evaluateAuthorization', () => {
     const grants = [grant('patients:patient:read', { mfaRequired: true })];
     expect(evaluateAuthorization({ ...base, grants })).toMatchObject({ reason: 'mfa_enrollment_required' });
     expect(evaluateAuthorization({ ...base, grants, mfaVerified: true })).toEqual({ allowed: true });
+  });
+
+  it('un rôle mfaRequired reste refusé sur réseau de confiance et sans motif « hors réseau »', () => {
+    const grants = [grant('patients:patient:read', { mfaRequired: true })];
+    const decision = evaluateAuthorization({ ...base, grants, networkTrusted: true });
+    expect(decision).toMatchObject({ allowed: false, reason: 'mfa_enrollment_required' });
+    expect(decision).not.toHaveProperty('offNetwork', true);
+  });
+
+  describe('MFA des rôles cliniques hors réseau (docs/11 D6)', () => {
+    const clinical = [grant('consultations:consultation:read')];
+    const clinicalInput = { ...base, required: ['consultations:consultation:read' as const], grants: clinical, enabledModules: new Set(['consultations']) };
+
+    it('refuse un soignant sans MFA hors réseau de confiance, en le signalant', () => {
+      expect(evaluateAuthorization({ ...clinicalInput, networkTrusted: false })).toEqual({
+        allowed: false,
+        reason: 'mfa_enrollment_required',
+        offNetwork: true,
+      });
+    });
+
+    it('autorise le même soignant sur réseau de confiance ou avec une session MFA', () => {
+      expect(evaluateAuthorization({ ...clinicalInput, networkTrusted: true })).toEqual({ allowed: true });
+      expect(evaluateAuthorization({ ...clinicalInput, networkTrusted: false, mfaVerified: true })).toEqual({ allowed: true });
+    });
+
+    it('refuse partout en mode always', () => {
+      expect(evaluateAuthorization({ ...clinicalInput, networkTrusted: true, clinicalMfaMode: 'always' })).toMatchObject({
+        reason: 'mfa_enrollment_required',
+        offNetwork: false,
+      });
+    });
+
+    it('ne concerne jamais un rôle non clinique', () => {
+      expect(evaluateAuthorization({ ...base, networkTrusted: false, clinicalMfaMode: 'always' })).toEqual({ allowed: true });
+    });
   });
 });
 

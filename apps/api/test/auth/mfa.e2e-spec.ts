@@ -2,9 +2,10 @@ import type { INestApplication } from '@nestjs/common';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TenantDb } from '../../src/infrastructure/prisma/tenant-db.service';
+import { LoginDelayService } from '../../src/modules/auth/services/login-delay.service';
 import { createTenantFixture, createUserWithRole, type TenantFixture, type UserFixture } from '../helpers/fixtures';
 import { createTestApp } from '../helpers/test-app';
-import { AUTH, bearer, enrollTotp, http, loginOk, postLogin, postMfaVerify, totpCode } from './auth-helpers';
+import { AUTH, bearer, enrollTotp, http, loginOk, postLogin, postMfaVerify, startTotpSetup, totpCode } from './auth-helpers';
 
 const STEP = 30;
 
@@ -45,7 +46,7 @@ describe('auth : second facteur TOTP et codes de secours', () => {
   it('setup renvoie un secret et une URL otpauth, stocke le secret chiffré, et refuse un code faux à l’activation', async () => {
     const login = await loginOk(app, tenant, flowUser.email);
 
-    const setup = await http(app).post(`${AUTH}/mfa/totp/setup`).set(bearer(login.accessToken)).expect(200);
+    const setup = await startTotpSetup(app, login.accessToken, flowUser.email).then((res) => (expect(res.status).toBe(200), res));
     const wrong = await http(app).post(`${AUTH}/mfa/totp/activate`).set(bearer(login.accessToken)).send({ code: '000000' }).expect(422);
 
     flowSecret = setup.body.data.secret;
@@ -59,7 +60,7 @@ describe('auth : second facteur TOTP et codes de secours', () => {
 
   it('activate renvoie 10 codes de secours hachés en base et un jeton mfa=true ; la session est vérifiée', async () => {
     const login = await loginOk(app, tenant, flowUser.email);
-    const setup = await http(app).post(`${AUTH}/mfa/totp/setup`).set(bearer(login.accessToken)).expect(200);
+    const setup = await startTotpSetup(app, login.accessToken, flowUser.email).then((res) => (expect(res.status).toBe(200), res));
     flowSecret = setup.body.data.secret;
 
     const res = await http(app)
@@ -76,7 +77,8 @@ describe('auth : second facteur TOTP et codes de secours', () => {
     expect(factor.backupCodeHashes).toHaveLength(10);
     expect(factor.backupCodeHashes.some((h) => flowBackupCodes.includes(h))).toBe(false);
     const me = await http(app).get(`${AUTH}/me`).set(bearer(res.body.data.accessToken)).expect(200);
-    expect(me.body.data.mfa).toEqual({ enrolled: true, verified: true, required: false });
+    // Médecin hors réseau de confiance (aucune plage déclarée) : la MFA est exigée de lui (docs/11 D6).
+    expect(me.body.data.mfa).toEqual({ enrolled: true, verified: true, required: true });
     const session = await tenantDb.runAs(tenant.tenantId, (tx) => tx.session.findMany({ where: { userId: flowUser.userId, mfaVerifiedAt: { not: null } } }));
     expect(session).toHaveLength(1);
   });
@@ -99,7 +101,7 @@ describe('auth : second facteur TOTP et codes de secours', () => {
     const ok = await verify(login.body.data.challengeId, await totpCode(flowSecret, STEP)).expect(200);
     const me = await http(app).get(`${AUTH}/me`).set(bearer(ok.body.data.accessToken)).expect(200);
 
-    expect(ok.body.data).toMatchObject({ mfaEnrolled: true, mfaRequired: false, expiresIn: 900 });
+    expect(ok.body.data).toMatchObject({ mfaEnrolled: true, mfaRequired: true, expiresIn: 900 });
     expect(me.body.data.mfa.verified).toBe(true);
   });
 
@@ -142,14 +144,19 @@ describe('auth : second facteur TOTP et codes de secours', () => {
     await verify(forged, 'abc').expect(422);
   });
 
-  it('bloque le challenge après 5 essais faux, même avec le bon code, et verrouille le compte', async () => {
-    const { secret } = await enrollTotp(app, exhaustUser.token);
+  it('bloque le challenge après 5 essais faux, même avec le bon code, sans verrouiller le compte', async () => {
+    const { secret } = await enrollTotp(app, exhaustUser.token, exhaustUser.email);
     const challenge = await challengeFor(exhaustUser.email);
 
     for (let i = 0; i < 5; i += 1) await verify(challenge, '000001').expect(401);
+    // Les codes faux alimentent le délai progressif (docs/11 §14.2 H2), contrôlé avant le challenge.
+    expect((await verify(challenge, await totpCode(secret, STEP)).expect(429)).body.code).toBe('login_delayed');
+    await app.get(LoginDelayService).clear(tenant.slug, exhaustUser.email);
     await verify(challenge, await totpCode(secret, STEP)).expect(401);
-    const relogin = await postLogin(app, tenant.slug, exhaustUser.email).expect(401);
+    // Plus de verrou dur : une fois le délai levé, le mot de passe reste accepté et un nouveau défi est émis.
+    const relogin = await postLogin(app, tenant.slug, exhaustUser.email).expect(200);
 
-    expect(relogin.body.code).toBe('invalid_credentials');
+    expect(relogin.body.data.mfaRequired).toBe(true);
+    expect(relogin.body.data.challengeId).not.toBe(challenge);
   });
 });

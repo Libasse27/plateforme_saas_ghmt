@@ -43,7 +43,9 @@ export function decideEarly(input: DecisionInput): EarlyOutcome | null {
   if (input.channel !== 'inapp' && input.address === null) return suppress('no_contact');
   if (input.category === 'clinical_reminder' && !input.consentGranted) return suppress('no_consent');
   if (input.category === 'transactional' && input.channel === 'sms' && (!input.appointmentSmsEnabled || input.smsStopped === true)) return suppress('channel_disabled');
-  const preferenceApplies = input.channel === 'email' && input.category === 'administrative' && !input.typeCode.startsWith('subscription.');
+  // Alertes de facturation et de sécurité : jamais supprimées par la préférence « e-mail administratif ».
+  const exempt = input.typeCode.startsWith('subscription.') || input.typeCode.startsWith('security.');
+  const preferenceApplies = input.channel === 'email' && input.category === 'administrative' && !exempt;
   if (preferenceApplies && !input.emailPreferenceEnabled) return suppress('preference_disabled');
   return null;
 }

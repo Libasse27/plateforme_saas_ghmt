@@ -48,3 +48,11 @@ export async function assertAnotherActiveAdmin(
     throw DomainError.conflict('last_admin', 'Le dernier administrateur actif de l’établissement ne peut pas être désactivé ni perdre son rôle.');
   }
 }
+
+/**
+ * Verrou de la ligne `security_settings` du tenant : sérialise le transfert du titre de principal avec la désactivation
+ * d'un administrateur ou le retrait de son rôle (la cible d'un transfert ne peut pas être désactivée entre-temps).
+ */
+export async function lockSecuritySettings(tx: TenantTx, tenantId: string): Promise<void> {
+  await tx.$queryRaw`SELECT tenant_id FROM tenant.security_settings WHERE tenant_id = ${tenantId}::uuid FOR UPDATE`;
+}

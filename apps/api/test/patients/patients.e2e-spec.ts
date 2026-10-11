@@ -662,7 +662,7 @@ describe('patients (HTTP)', () => {
         tx.auditLog.findFirstOrThrow({ where: { action: 'patient.updated', resourceId: created['id'] } }),
       );
 
-      expect(log.changes).toEqual({ fields: ['nationalId', 'city'] });
+      expect(log.changes).toEqual({ fields: ['nationalId', 'city'], offNetwork: true });
       expect(JSON.stringify(log.changes)).not.toContain('NOUVEAU-NID-42');
     });
 
@@ -716,7 +716,7 @@ describe('patients (HTTP)', () => {
 
       expect(found.body.data).toEqual([]);
       expect(stored?.deletedAt).toBeInstanceOf(Date);
-      expect(log.changes).toEqual({ reason: 'Saisie par erreur', cancelledAppointmentIds: [] });
+      expect(log.changes).toEqual({ reason: 'Saisie par erreur', cancelledAppointmentIds: [], offNetwork: true });
     });
 
     it('renvoie 404 à la seconde suppression', async () => {

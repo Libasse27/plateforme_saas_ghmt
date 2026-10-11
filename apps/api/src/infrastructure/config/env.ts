@@ -146,6 +146,10 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   const production = source['NODE_ENV'] === 'production';
   assertSmsConfiguration(result.data, production);
   assertRateLimitConfiguration(result.data, production);
+  // Les liens envoyés par e-mail (réinitialisation, invitation, confirmation) portent un jeton : jamais en clair.
+  if (production && !result.data.WEB_URL.startsWith('https://')) {
+    throw new Error('Configuration invalide : WEB_URL doit utiliser https en production.');
+  }
   const configured = result.data.JWT_PLATFORM_SECRET;
   if (production && !configured) throw new Error('Configuration invalide : JWT_PLATFORM_SECRET doit être défini en production.');
   if (production && configured === result.data.JWT_ACCESS_SECRET) {

@@ -13,21 +13,27 @@ describe('SmtpMailer', () => {
     createTransport.mockClear();
   });
 
-  it('configure le transport SMTP depuis l’environnement (Mailpit : localhost:1025, sans TLS)', () => {
-    new SmtpMailer({ SMTP_HOST: 'localhost', SMTP_PORT: 1025, MAIL_FROM: 'GHMT <no-reply@ghmt.local>' });
+  it('configure le transport SMTP depuis l’environnement (Mailpit : localhost:1025, sans TLS en développement)', () => {
+    new SmtpMailer({ NODE_ENV: 'development', SMTP_HOST: 'localhost', SMTP_PORT: 1025, MAIL_FROM: 'GHMT <no-reply@ghmt.local>' });
 
-    expect(createTransport).toHaveBeenCalledWith(expect.objectContaining({ host: 'localhost', port: 1025, secure: false }));
+    expect(createTransport).toHaveBeenCalledWith(expect.objectContaining({ host: 'localhost', port: 1025, secure: false, requireTLS: false }));
   });
 
   it('active TLS implicite sur le port 465', () => {
-    new SmtpMailer({ SMTP_HOST: 'smtp.example.org', SMTP_PORT: 465, MAIL_FROM: 'a@b.c' });
+    new SmtpMailer({ NODE_ENV: 'production', SMTP_HOST: 'smtp.example.org', SMTP_PORT: 465, MAIL_FROM: 'a@b.c' });
 
     expect(createTransport).toHaveBeenCalledWith(expect.objectContaining({ secure: true }));
   });
 
+  it('en production, exige STARTTLS sur un port non chiffré : aucun lien de réinitialisation en clair sur le réseau', () => {
+    new SmtpMailer({ NODE_ENV: 'production', SMTP_HOST: 'smtp.example.org', SMTP_PORT: 587, MAIL_FROM: 'a@b.c' });
+
+    expect(createTransport).toHaveBeenCalledWith(expect.objectContaining({ secure: false, requireTLS: true }));
+  });
+
   it('envoie le message avec l’expéditeur configuré, en texte et en HTML si fourni', async () => {
     sendMail.mockResolvedValue({});
-    const mailer = new SmtpMailer({ SMTP_HOST: 'localhost', SMTP_PORT: 1025, MAIL_FROM: 'GHMT <no-reply@ghmt.local>' });
+    const mailer = new SmtpMailer({ NODE_ENV: 'development', SMTP_HOST: 'localhost', SMTP_PORT: 1025, MAIL_FROM: 'GHMT <no-reply@ghmt.local>' });
 
     await mailer.send({ to: 'awa@test.sn', subject: 'Sujet', text: 'texte', html: '<p>texte</p>' });
     await mailer.send({ to: 'awa@test.sn', subject: 'Sujet', text: 'texte seul' });
@@ -38,7 +44,7 @@ describe('SmtpMailer', () => {
 
   it('propage l’échec du serveur SMTP', async () => {
     sendMail.mockRejectedValue(new Error('ECONNREFUSED'));
-    const mailer = new SmtpMailer({ SMTP_HOST: 'localhost', SMTP_PORT: 1025, MAIL_FROM: 'a@b.c' });
+    const mailer = new SmtpMailer({ NODE_ENV: 'development', SMTP_HOST: 'localhost', SMTP_PORT: 1025, MAIL_FROM: 'a@b.c' });
 
     await expect(mailer.send({ to: 'x@y.z', subject: 's', text: 't' })).rejects.toThrow('ECONNREFUSED');
   });

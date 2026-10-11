@@ -605,7 +605,7 @@ Format d'erreur `problem+json` enveloppé ; identifiant mal formé ou ressource 
 | POST | `/auth/mfa/totp/setup` | authentifié | `{ emailCode? }` (facultatif) → 200 `{ otpauthUrl, secret }` | 403 `mfa_email_code_required` (hors réseau sans code), 422 `invalid_email_code`, 409 `mfa_already_enrolled` |
 | GET | `/iam/security/policy` | `iam:policy:read` | → `{ clinicalMfa, trustedNetworks[], requestIp, requestIpTrusted, owner, updatedAt }` | |
 | PUT | `/iam/security/policy` | `iam:policy:update` | `{ clinicalMfa: 'off_network'\|'always' }` → politique | 422 |
-| POST | `/iam/security/trusted-networks` | `iam:policy:update` | `{ cidr, label, siteId? }` → 201 plage | 422 `invalid_cidr`, `cidr_too_broad` (< /16 IPv4, < /32 IPv6), `trusted_network_limit` (50), `scope_not_found` ; 409 `trusted_network_exists` |
+| POST | `/iam/security/trusted-networks` | `iam:policy:update` | `{ cidr, label, totpCode }` → 201 plage (valable pour tout l'établissement) | 422 `invalid_cidr`, `cidr_too_broad` (< /24 IPv4, < /48 IPv6), `cidr_reserved`, `trusted_network_limit` (50) ; 409 `trusted_network_exists` |
 | DELETE | `/iam/security/trusted-networks/{id}` | `iam:policy:update` | 204 | 404 |
 | POST | `/iam/security/owner` | `iam:policy:update` et être le principal | `{ userId }` → politique | 403 `owner_required`, 422 `owner_target_invalid` |
 | DELETE | `/iam/users/{id}/mfa` | `iam:user:update` | 204 (facteur supprimé, sessions révoquées `mfa_reset`, e-mail) | 403 `admin_hierarchy`, 409 `mfa_not_enrolled`, 422 `self_mfa_reset` |

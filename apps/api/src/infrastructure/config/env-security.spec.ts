@@ -10,7 +10,7 @@ const BASE = {
   DATA_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString('base64'),
   BLIND_INDEX_KEY: Buffer.alloc(32, 2).toString('base64'),
 };
-const PRODUCTION = { ...BASE, NODE_ENV: 'production', TRUSTED_PROXIES: '10.0.0.0/8', JWT_PLATFORM_SECRET: 'p'.repeat(40) };
+const PRODUCTION = { ...BASE, NODE_ENV: 'production', WEB_URL: 'https://app.ghmt.sn', TRUSTED_PROXIES: '10.0.0.0/8', JWT_PLATFORM_SECRET: 'p'.repeat(40) };
 
 describe('loadEnv : durcissement sécurité (valeurs par défaut)', () => {
   it('applique les défauts du contrat', () => {
@@ -50,6 +50,15 @@ describe('loadEnv : Redis et limitation de débit', () => {
     expect(loadEnv({ ...BASE, RATE_LIMIT_KEY_PREFIX: 'test:run-1:' }).RATE_LIMIT_KEY_PREFIX).toBe('test:run-1:');
     expect(() => loadEnv({ ...BASE, RATE_LIMIT_KEY_PREFIX: 'Majuscules' })).toThrow(/RATE_LIMIT_KEY_PREFIX/);
     expect(() => loadEnv({ ...BASE, RATE_LIMIT_KEY_PREFIX: 'x'.repeat(33) })).toThrow(/RATE_LIMIT_KEY_PREFIX/);
+  });
+});
+
+describe('loadEnv : liens envoyés par e-mail', () => {
+  it('impose WEB_URL en https en production (liens de réinitialisation et d’invitation), pas en développement', () => {
+    const production = { ...PRODUCTION, RATE_LIMIT_STORE: 'redis', REDIS_URL: 'rediss://cache:6380' };
+    expect(() => loadEnv({ ...production, WEB_URL: 'http://app.ghmt.sn' })).toThrow(/WEB_URL/);
+    expect(loadEnv(production).WEB_URL).toBe('https://app.ghmt.sn');
+    expect(loadEnv({ ...BASE, WEB_URL: 'http://localhost:3001' }).WEB_URL).toBe('http://localhost:3001');
   });
 });
 

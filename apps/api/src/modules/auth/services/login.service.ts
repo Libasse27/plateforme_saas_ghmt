@@ -2,7 +2,6 @@ import { Injectable } from '@nestjs/common';
 import type { LoginInput, LoginResponse } from '@ghmt/shared';
 import { PasswordService } from '../../../common/auth/password.service';
 import { AuditService } from '../../../common/audit/audit.service';
-import { AuthorizationService } from '../../../common/authz/authorization.service';
 import { DomainError } from '../../../common/errors/domain-error';
 import { Clock } from '../../../common/time/clock';
 import { TenantDb, type TenantTx } from '../../../infrastructure/prisma/tenant-db.service';
@@ -10,7 +9,8 @@ import { MFA_CHALLENGE_TTL_MS, SESSION_TENANT_STATUSES, TOTP_KIND } from '../aut
 import { registerFailedAttempt } from './failed-attempts';
 import { LoginCompletionService } from './login-completion.service';
 import { LoginDelayEventsService } from './login-delay-events.service';
-import { LoginDelayService } from './login-delay.service';
+import { LoginContextService } from './login-context.service';
+import { LoginDelayService, type LoginContext } from './login-delay.service';
 import { issueOpaqueToken } from '../../../common/auth/opaque-token';
 import { SessionService } from './session.service';
 
@@ -40,7 +40,7 @@ export class LoginService {
     private readonly tenantDb: TenantDb,
     private readonly passwords: PasswordService,
     private readonly audit: AuditService,
-    private readonly authz: AuthorizationService,
+    private readonly contexts: LoginContextService,
     private readonly sessions: SessionService,
     private readonly completion: LoginCompletionService,
     private readonly delay: LoginDelayService,
@@ -51,8 +51,8 @@ export class LoginService {
   async login(input: LoginInput): Promise<LoginResponse> {
     const now = this.clock.now();
     // Vérification et réservation atomiques, avant toute vérification du mot de passe, même juste (docs/11 D3) : la tentative
-    // admise compte d'emblée comme un échec. Plafond de 60 s depuis le réseau de l'établissement (décision 21).
-    const admission = await this.delay.admit(input.tenantSlug, input.email, now, () => this.fromTrustedNetwork(input.tenantSlug));
+    // admise compte d'emblée comme un échec. Contexte connu (réseau de l'établissement, IP déjà utilisée) : décisions 21 et 25.
+    const admission = await this.delay.admit(input.tenantSlug, input.email, now, () => this.loginContext(input.tenantSlug, input.email, now));
     if (!admission.allowed) {
       await this.delayEvents.delayed(input.tenantSlug, input.email, admission.retryAfterSeconds, 'login');
       throw DomainError.loginDelayed(admission.retryAfterSeconds);
@@ -75,15 +75,15 @@ export class LoginService {
     }
     // Mot de passe juste mais établissement non confirmé : message dédié (jamais pour un mot de passe incorrect).
     if (tenant.status === 'pending') {
-      await this.delay.release(input.tenantSlug, input.email);
+      await this.delay.release(admission);
       throw DomainError.forbidden('email_verification_required', 'Confirmez l’adresse e-mail de l’administrateur pour activer l’établissement.');
     }
 
     const response = await this.openOrChallenge(tenant.id, user, input.password, now);
     // Après le commit. Second facteur attendu : le mot de passe juste n'est pas un échec (un code faux sera compté par
     // `mfa/verify`) ; connexion ouverte : remise à zéro du compteur.
-    if ('challengeId' in response) await this.delay.release(input.tenantSlug, input.email);
-    else await this.delay.clear(input.tenantSlug, input.email);
+    if ('challengeId' in response) await this.delay.release(admission);
+    else await this.delay.clear(input.tenantSlug, input.email, admission);
     return response;
   }
 
@@ -105,12 +105,11 @@ export class LoginService {
     );
   }
 
-  /** IP de la requête dans une plage de confiance de l'établissement (établissement inconnu ou fermé : non). */
-  private async fromTrustedNetwork(slug: string): Promise<boolean> {
+  /** Contexte de la tentative (établissement inconnu ou fermé : aucun contexte connu). */
+  private async loginContext(slug: string, email: string, now: Date): Promise<LoginContext> {
     const tenant = await this.resolveTenant(slug);
-    if (!tenant || !SESSION_TENANT_STATUSES.has(tenant.status)) return false;
-    const policy = await this.tenantDb.runAs(tenant.id, (tx) => this.authz.loadNetworkPolicy(tx, this.sessions.clientMeta().ip));
-    return policy.networkTrusted;
+    if (!tenant || !SESSION_TENANT_STATUSES.has(tenant.status)) return { ip: null, trustedNetwork: false, knownIp: false };
+    return this.contexts.evaluate(tenant.id, email, now);
   }
 
   private async resolveTenant(slug: string): Promise<ResolvedTenant | undefined> {

@@ -184,12 +184,11 @@ function totpCodeOf(flat: Flat): { readonly code: string } | { readonly error: s
 export interface TrustedNetworkInput {
   readonly cidr: string;
   readonly label: string;
-  readonly siteId?: string;
   readonly totpCode: string;
 }
 
 export function trustedNetworkForm(flat: Flat): FormResult<TrustedNetworkInput> {
-  const input = clean(flat, ['cidr', 'label', 'siteId']);
+  const input = clean(flat, ['cidr', 'label']);
   const errors: Record<string, string> = {};
   const cidr = validateCidr(input.cidr ?? '');
   if (!cidr.ok) errors.cidr = cidr.message;
@@ -199,11 +198,10 @@ export function trustedNetworkForm(flat: Flat): FormResult<TrustedNetworkInput> 
     .max(LABEL_MAX, `Le libellé ne doit pas dépasser ${String(LABEL_MAX)} caractères.`)
     .safeParse(input.label ?? '');
   if (!label.success) errors.label = label.error.issues[0]?.message ?? 'Libellé invalide.';
-  if (input.siteId !== undefined && !z.uuid().safeParse(input.siteId).success) errors.siteId = 'Site invalide.';
   const totp = totpCodeOf(flat);
   if ('error' in totp) errors.totpCode = totp.error;
   if (Object.keys(errors).length > 0 || !cidr.ok || !label.success || 'error' in totp) return fail(errors);
-  return { ok: true, data: { cidr: cidr.cidr, label: label.data, ...(input.siteId ? { siteId: input.siteId } : {}), totpCode: totp.code } };
+  return { ok: true, data: { cidr: cidr.cidr, label: label.data, totpCode: totp.code } };
 }
 
 export function removeNetworkForm(flat: Flat): FormResult<{ readonly networkId: string; readonly totpCode: string }> {

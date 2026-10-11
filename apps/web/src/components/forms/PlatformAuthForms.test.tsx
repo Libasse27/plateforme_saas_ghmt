@@ -57,6 +57,7 @@ describe('composants MFA paramétrables par realm', () => {
     await user.click(screen.getByRole('button', { name: 'Valider' }));
     await waitFor(() => expect(action).toHaveBeenCalled());
     expect((action.mock.calls[0]?.[1] as FormData).get('code')).toBe('123456');
+    expect(screen.getByLabelText(/Code de vérification/)).toHaveAccessibleDescription(expect.stringContaining('Téléphone perdu ?'));
   });
 
   it('TotpEnrolment utilise les actions et le lien de fin fournis', async () => {

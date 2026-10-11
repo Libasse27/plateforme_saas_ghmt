@@ -55,25 +55,25 @@ export class SecurityService {
 
   async addNetwork(input: CreateTrustedNetworkInput): Promise<TrustedNetworkView> {
     const principal = this.context.requirePrincipal();
-    // Contrôles avant le code : une faute de frappe, un doublon ou un site inconnu ne consomment pas de code TOTP. Ils sont
+    // Contrôles avant le code : une faute de frappe, un doublon ou la limite atteinte ne consomment pas de code TOTP. Ils sont
     // refaits dans la transaction de l'opération (le code, lui, reste consommé même si elle échoue).
     const parsed = parseTrustedCidr(input.cidr);
     await this.stepUp.confirm(principal, input.totpCode, async (tx) => {
       await this.assertOwner(tx, principal);
-      await this.assertCanAdd(tx, parsed.network, input.siteId);
+      await this.assertCanAdd(tx, parsed.network);
     });
     return this.tenantDb.run(async (tx) => {
       await this.assertOwner(tx, principal);
-      await this.assertCanAdd(tx, parsed.network, input.siteId);
+      await this.assertCanAdd(tx, parsed.network);
       const created = await tx.trustedNetwork.create({
-        data: { tenantId: principal.tenantId, network: parsed.network, label: input.label, siteId: input.siteId ?? null, createdBy: principal.userId },
+        data: { tenantId: principal.tenantId, network: parsed.network, label: input.label, createdBy: principal.userId },
         select: { id: true },
       });
       await this.audit.record(tx, principal.tenantId, {
         action: 'iam.security.trusted_network_added',
         resourceType: 'trusted_network',
         resourceId: created.id,
-        changes: { cidr: parsed.network, label: input.label, siteId: input.siteId ?? null },
+        changes: { cidr: parsed.network, label: input.label },
       });
       await this.alert(tx, principal, 'security.trusted_network_changed');
       return (await this.reader.networks(tx)).find((n) => n.id === created.id)!;
@@ -85,14 +85,14 @@ export class SecurityService {
     await this.stepUp.confirm(principal, totpCode, (tx) => this.assertOwner(tx, principal));
     await this.tenantDb.run(async (tx) => {
       await this.assertOwner(tx, principal);
-      const row = await tx.trustedNetwork.findFirst({ where: { id, deletedAt: null }, select: { network: true, label: true, siteId: true } });
+      const row = await tx.trustedNetwork.findFirst({ where: { id, deletedAt: null }, select: { network: true, label: true } });
       const removed = row ? await tx.trustedNetwork.updateMany({ where: { id, deletedAt: null }, data: { deletedAt: new Date() } }) : { count: 0 };
       if (!row || removed.count === 0) throw DomainError.notFound('Plage réseau');
       await this.audit.record(tx, principal.tenantId, {
         action: 'iam.security.trusted_network_removed',
         resourceType: 'trusted_network',
         resourceId: id,
-        changes: { cidr: toCidr(row.network), label: row.label, siteId: row.siteId },
+        changes: { cidr: toCidr(row.network), label: row.label },
       });
       await this.alert(tx, principal, 'security.trusted_network_changed');
     });
@@ -138,12 +138,9 @@ export class SecurityService {
     if ((await this.hierarchy.ownerId(tx)) !== principal.userId) throw DomainError.forbidden('owner_required', detail);
   }
 
-  private async assertCanAdd(tx: TenantTx, network: string, siteId: string | undefined): Promise<void> {
+  private async assertCanAdd(tx: TenantTx, network: string): Promise<void> {
     if ((await tx.trustedNetwork.count({ where: { deletedAt: null } })) >= TRUSTED_NETWORK_MAX) {
       throw DomainError.unprocessable('trusted_network_limit', `Limite atteinte : ${TRUSTED_NETWORK_MAX} plages au plus par établissement.`);
-    }
-    if (siteId && !(await tx.site.findFirst({ where: { id: siteId, deletedAt: null }, select: { id: true } }))) {
-      throw DomainError.unprocessable('scope_not_found', 'Le site indiqué est introuvable.');
     }
     const duplicates = await tx.$queryRaw<{ id: string }[]>`
       SELECT id::text AS id FROM tenant.trusted_networks WHERE deleted_at IS NULL AND network = ${network}::inet`;

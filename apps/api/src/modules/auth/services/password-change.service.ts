@@ -56,7 +56,7 @@ export class PasswordChangeService {
       throw DomainError.unprocessable('invalid_current_password', 'Le mot de passe actuel est incorrect.');
     }
     // Mot de passe actuel juste : la tentative réservée n'était pas un échec (rendue après le commit).
-    await this.delay.release(tenantSlug, email);
+    await this.delay.release(admission);
     if (outcome.kind === 'unchanged') throw DomainError.unprocessable('password_unchanged', 'Le nouveau mot de passe doit différer de l’actuel.');
   }
 

@@ -37,14 +37,6 @@ end
 return { hits, windowTtl, 0, 0 }
 `;
 
-/** Compteur d'échecs : HINCRBY + date du dernier échec + expiration glissante. KEYS[1] = hash ; ARGV = ttl, maintenant (ms). */
-const FAILURE_SCRIPT = `
-local count = redis.call('HINCRBY', KEYS[1], 'count', 1)
-redis.call('HSET', KEYS[1], 'last', ARGV[2])
-redis.call('PEXPIRE', KEYS[1], ARGV[1])
-return { count, tonumber(ARGV[2]) }
-`;
-
 /**
  * Admission atomique d'une tentative (délai progressif) : lit le compteur, applique le barème (plafonné si ARGV[3] ≥ 0), refuse
  * pendant le délai, sinon réserve la tentative. KEYS[1] = hash ; ARGV = ttl, maintenant (ms), plafond (s, −1 : aucun), n, barème…
@@ -104,11 +96,6 @@ export class RedisRateLimitStore implements RateLimitStore {
     const raw = (await this.client.eval(HIT_SCRIPT, 2, counter, `${counter}:block`, ttlMs, limit, blockMs)) as ScriptNumbers;
     const [totalHits, windowTtl, blocked, blockTtl] = raw;
     return { totalHits, timeToExpireMs: windowTtl, isBlocked: blocked === 1, timeToBlockExpireMs: blockTtl };
-  }
-
-  async recordFailure(key: string, ttlMs: number, nowMs: number): Promise<FailureRecord> {
-    const raw = (await this.client.eval(FAILURE_SCRIPT, 1, `${this.keyPrefix}${key}:fail`, ttlMs, nowMs)) as readonly [number, number];
-    return { count: raw[0], lastAtMs: raw[1] };
   }
 
   async gate(key: string, ttlMs: number, nowMs: number, scheduleSeconds: readonly number[], capSeconds: number | null): Promise<AttemptGate> {

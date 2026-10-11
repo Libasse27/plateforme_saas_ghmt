@@ -22,7 +22,6 @@ export interface TrustedNetworkView {
   readonly id: string;
   readonly cidr: string;
   readonly label: string;
-  readonly siteId: string | null;
   readonly createdAt: string;
   readonly createdBy: PersonRef | null;
 }
@@ -52,7 +51,6 @@ export function toTrustedNetwork(raw: unknown): TrustedNetworkView {
     id: str(data.id),
     cidr: str(data.cidr),
     label: str(data.label),
-    siteId: strOrNull(data.siteId),
     createdAt: str(data.createdAt),
     createdBy: toPersonRef(data.createdBy),
   };

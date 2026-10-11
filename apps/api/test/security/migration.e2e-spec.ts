@@ -107,11 +107,13 @@ describe('migration 20261006000100_auth_hardening', () => {
       await expect(insertNetwork(tenant, network)).rejects.toThrow(new RegExp(`${constraint}|23514`));
     });
 
-    it('refuse un mode MFA inconnu et un doublon actif, accepte les plages normalisées', async () => {
+    it('refuse un mode MFA inconnu, un doublon actif et une plage trop large (migration 20261006000150), accepte les plages normalisées', async () => {
       await expect(db().runAs(tenant.tenantId, (tx) => tx.securitySettings.update({ where: { tenantId: tenant.tenantId }, data: { clinicalMfaMode: 'disabled' } }))).rejects.toThrow();
       await insertNetwork(tenant, '203.0.113.0/24');
-      await insertNetwork(tenant, '2001:db8::/32');
+      await insertNetwork(tenant, '2001:db8:1::/48');
       await expect(insertNetwork(tenant, '203.0.113.0/24')).rejects.toThrow();
+      await expect(insertNetwork(tenant, '203.0.0.0/16')).rejects.toThrow();
+      await expect(insertNetwork(tenant, '2001:db8::/32')).rejects.toThrow();
     });
 
     it('isole les tables par établissement (RLS)', async () => {

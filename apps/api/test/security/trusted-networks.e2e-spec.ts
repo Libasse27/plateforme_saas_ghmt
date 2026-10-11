@@ -152,21 +152,23 @@ describe('iam : réseaux de confiance et MFA des soignants hors réseau (docs/11
     it('ajoute une plage normalisée, la liste dans la politique, l’audite et prévient les directeurs', async () => {
       const created = await addNetwork('41.82.10.77/24', 201);
 
-      expect(created.body.data).toMatchObject({ cidr: HOSPITAL_NETWORK, label: 'Siège', siteId: null, createdBy: { id: tenant.adminUserId } });
+      expect(created.body.data).toMatchObject({ cidr: HOSPITAL_NETWORK, label: 'Siège', createdBy: { id: tenant.adminUserId } });
+      expect(created.body.data).not.toHaveProperty('siteId');
       const policy = await http(app).get(POLICY).set('X-Forwarded-For', HOSPITAL).set(bearer(tenant.adminToken)).expect(200);
       expect(policy.body.data.trustedNetworks.map((n: { cidr: string }) => n.cidr)).toEqual([HOSPITAL_NETWORK]);
       expect(policy.body.data.requestIpTrusted).toBe(true);
       const audits = await app.get(TenantDb).runAs(tenant.tenantId, (tx) => tx.auditLog.findMany({ where: { action: 'iam.security.trusted_network_added' } }));
-      expect(audits.at(-1)!.changes).toEqual({ cidr: HOSPITAL_NETWORK, label: 'Siège', siteId: null });
+      expect(audits.at(-1)!.changes).toEqual({ cidr: HOSPITAL_NETWORK, label: 'Siège' });
       const alerts = await notificationsOf('security.trusted_network_changed');
       expect(new Set(alerts.map((a) => a.recipientId))).toEqual(new Set([director.userId]));
       await clearNetworks();
     });
 
-    it('accepte une adresse seule en /32 et un rattachement à un site du tenant', async () => {
+    it('accepte une adresse seule en /32 ; un siteId éventuel est ignoré, la plage vaut pour tout l’établissement (décision 26)', async () => {
       const res = await addNetwork('154.124.5.7/32', 201, { siteId: tenant.mainSiteId });
 
-      expect(res.body.data).toMatchObject({ cidr: '154.124.5.7/32', siteId: tenant.mainSiteId });
+      expect(res.body.data).toMatchObject({ cidr: '154.124.5.7/32' });
+      expect(res.body.data).not.toHaveProperty('siteId');
       await clearNetworks();
     });
 
@@ -188,10 +190,9 @@ describe('iam : réseaux de confiance et MFA des soignants hors réseau (docs/11
       expect(res.body.code).toBe(expected);
     });
 
-    it('refuse un corps invalide (422 validation) et un site d’un autre établissement (422 scope_not_found)', async () => {
+    it('refuse un corps invalide (422 validation)', async () => {
       expect((await http(app).post(NETWORKS).set(bearer(tenant.adminToken)).send({ label: 'Siège' }).expect(422)).body.code).toBe('validation_failed');
       expect((await addNetwork(HOSPITAL_NETWORK, 422, { totpCode: '12ab' })).body.code).toBe('validation_failed');
-      expect((await addNetwork(HOSPITAL_NETWORK, 422, { siteId: other.mainSiteId })).body.code).toBe('scope_not_found');
     });
 
     it('refuse un doublon (409) et plus de 50 plages (422 trusted_network_limit)', async () => {

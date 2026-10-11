@@ -80,6 +80,7 @@ describe('ResetPasswordForm', () => {
     const field = screen.getByLabelText(/Code de vérification/);
     expect(field).toHaveAttribute('autocomplete', 'one-time-code');
     expect(field).toBeRequired();
+    expect(field).toHaveAccessibleDescription(expect.stringContaining('Téléphone perdu ? Utilisez un code de secours ou contactez votre administrateur.'));
   });
 
   it('soumet le jeton et le code établissement en champs cachés, sans les afficher', async () => {

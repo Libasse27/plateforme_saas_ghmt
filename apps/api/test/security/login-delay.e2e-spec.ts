@@ -3,7 +3,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BackgroundTasks } from '../../src/common/tasks/background-tasks';
 import { PlatformDb } from '../../src/infrastructure/prisma/platform-db.service';
 import { TenantDb } from '../../src/infrastructure/prisma/tenant-db.service';
-import { LoginDelayService } from '../../src/modules/auth/services/login-delay.service';
+import { RATE_LIMIT_STORE } from '../../src/common/rate-limit/rate-limit-runtime';
+import type { RateLimitStore } from '../../src/common/rate-limit/rate-limit-store';
+import { loginIdentifierKey } from '../../src/modules/auth/services/login-delay.service';
 import { AUTH, TEST_USER_AGENT, bearer, http, memoryMailer, postLogin } from '../auth/auth-helpers';
 import { FIXTURE_PASSWORD, createTenantFixture, createUserWithRole, type TenantFixture, type UserFixture } from '../helpers/fixtures';
 import { createTestApp } from '../helpers/test-app';
@@ -11,10 +13,13 @@ import { createClockOverrides } from '../notifications/notification-fixtures';
 
 const BAD = 'mauvais-mot-de-passe';
 const SECOND_MS = 1_000;
+const DAY_MS = 24 * 3_600 * SECOND_MS;
 /** Plage publique déclarée comme réseau de l'établissement (les plages privées ne sont pas des réseaux de confiance). */
 const TRUSTED_CIDR = '41.82.200.0/24';
 const TRUSTED_IP = '41.82.200.17';
 const OUTSIDE_IP = '41.82.201.17';
+/** IP publique hors réseau de l'établissement, d'où le compte s'est déjà connecté (décision 25). */
+const HOME_IP = '154.124.5.20';
 const DELAYS_BEFORE_TENTH = [0, 0, 0, 0, 30, 60, 120, 300, 600];
 
 describe('auth : délai progressif de connexion (docs/11 D3)', () => {
@@ -25,6 +30,11 @@ describe('auth : délai progressif de connexion (docs/11 D3)', () => {
   const advance = (seconds: number) => clock.set(new Date(clock.now().getTime() + seconds * SECOND_MS));
   const failTimes = async (slug: string, email: string, times: number) => {
     for (let i = 0; i < times; i += 1) await postLogin(app, slug, email, BAD).expect(401);
+  };
+  /** Échecs « venus d'ailleurs » amorcés directement sur le compteur du compte (barème nul : aucun refus). */
+  const seedFailures = async (email: string, times: number) => {
+    const store = app.get<RateLimitStore>(RATE_LIMIT_STORE);
+    for (let i = 0; i < times; i += 1) await store.gate(loginIdentifierKey(tenant.slug, email), DAY_MS, clock.now().getTime(), [0], null);
   };
   const newUser = (role = 'cashier'): Promise<UserFixture> => createUserWithRole(app, tenant, role);
   const loginFrom = (ip: string, email: string, password: string = FIXTURE_PASSWORD) =>
@@ -171,17 +181,37 @@ describe('auth : délai progressif de connexion (docs/11 D3)', () => {
       await app.get(TenantDb).runAs(tenant.tenantId, (tx) => tx.trustedNetwork.create({ data: { tenantId: tenant.tenantId, network: TRUSTED_CIDR, label: 'Hôpital' } }));
     });
 
-    it('plafonne le délai à 60 s depuis le réseau de l’établissement ; ailleurs le barème est inchangé', async () => {
+    it('décision 25 : les échecs venus d’ailleurs ne retardent pas une connexion depuis le réseau de l’établissement', async () => {
       const user = await newUser();
-      for (let i = 0; i < 8; i += 1) await app.get(LoginDelayService).recordFailure(tenant.slug, user.email, clock.now());
+      await seedFailures(user.email, 8);
 
-      const onSite = await loginFrom(TRUSTED_IP, user.email).expect(429);
       const elsewhere = await loginFrom(OUTSIDE_IP, user.email).expect(429);
-
-      expect(onSite.headers['retry-after']).toBe('60');
       expect(elsewhere.headers['retry-after']).toBe('300');
-      advance(61);
       await loginFrom(TRUSTED_IP, user.email).expect(200);
+      // La réussite sur site n'efface pas les échecs venus d'ailleurs.
+      await loginFrom(OUTSIDE_IP, user.email).expect(429);
+    });
+
+    it('décision 25 : une IP déjà utilisée avec succès par le compte échappe au délai dû aux échecs venus d’ailleurs', async () => {
+      const user = await newUser();
+      await loginFrom(HOME_IP, user.email).expect(200);
+      await seedFailures(user.email, 8);
+
+      await loginFrom(HOME_IP, user.email).expect(200);
+      await loginFrom(OUTSIDE_IP, user.email).expect(429);
+    });
+
+    it('décision 25 : depuis le réseau de l’établissement, ses propres échecs suivent le barème plafonné à 60 s (décision 21)', async () => {
+      const user = await newUser();
+      await seedFailures(user.email, 8);
+      for (let i = 0; i < 7; i += 1) {
+        await loginFrom(TRUSTED_IP, user.email, BAD).expect(401);
+        advance((DELAYS_BEFORE_TENTH[i] ?? 0) + 1);
+      }
+      advance(-((DELAYS_BEFORE_TENTH[6] ?? 0) + 1));
+
+      const capped = await loginFrom(TRUSTED_IP, user.email).expect(429);
+      expect(capped.headers['retry-after']).toBe('60');
     });
 
     it('audite les refus login_delayed (auth.login.delayed), au plus un par compte et par heure', async () => {

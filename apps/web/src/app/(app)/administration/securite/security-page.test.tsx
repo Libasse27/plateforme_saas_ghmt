@@ -24,7 +24,6 @@ import SecurityPage from './page';
 
 const ME_ID = '0190c1a0-aaaa-7000-8000-000000000001';
 const OTHER = '0190c1a0-bbbb-7000-8000-000000000002';
-const SITE = '0190c1a0-cccc-7000-8000-000000000003';
 
 function setMe(permissions: string[]) {
   state.me = {
@@ -38,7 +37,7 @@ function setMe(permissions: string[]) {
 
 const policy = (overrides: Record<string, unknown> = {}) => ({
   clinicalMfa: 'off_network',
-  trustedNetworks: [{ id: '0190c1a0-dddd-7000-8000-000000000004', cidr: '203.0.113.0/24', label: 'Siège', siteId: SITE, createdAt: '2026-10-05T08:00:00.000Z', createdBy: { id: ME_ID, fullName: 'Admin' } }],
+  trustedNetworks: [{ id: '0190c1a0-dddd-7000-8000-000000000004', cidr: '203.0.113.0/24', label: 'Siège', createdAt: '2026-10-05T08:00:00.000Z', createdBy: { id: ME_ID, fullName: 'Admin' } }],
   requestIp: '198.51.100.7',
   requestIpTrusted: false,
   owner: { id: ME_ID, fullName: 'Admin' },
@@ -63,14 +62,20 @@ describe('/administration/securite', () => {
   it('affiche la politique, les réseaux, l\'adresse actuelle et l\'administrateur principal', async () => {
     setMe(['iam:policy:read', 'iam:policy:update', 'org:site:read']);
     state.routes.set('/iam/security/policy', policy());
-    state.routes.set('/org/sites', [{ id: SITE, code: 'A', name: 'Dakar Plateau', city: 'Dakar' }]);
     render(await SecurityPage());
     expect(screen.getByRole('heading', { level: 1, name: 'Sécurité' })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: /Hors du réseau de l'établissement seulement/ })).toBeChecked();
     expect(screen.getByText('203.0.113.0/24')).toBeInTheDocument();
-    expect(screen.getByText('203.0.113.0/24').closest('tr')).toHaveTextContent('Dakar Plateau');
+    expect(state.calls.some((c) => c.path === '/org/sites')).toBe(false);
     expect(screen.getByText(/Votre adresse actuelle : 198\.51\.100\.7/)).toHaveTextContent('réseau de confiance : non');
     expect(screen.getByText(/Administrateur principal : Admin/)).toBeInTheDocument();
+  });
+
+  it('l\'avertissement de suppression d\'une plage cite les soignants sans second facteur (docs/11 §14.4.3)', async () => {
+    setMe(['iam:policy:read', 'iam:policy:update']);
+    state.routes.set('/iam/security/policy', policy({ canManage: true, clinicalUsersWithoutMfa: 2 }));
+    render(await SecurityPage());
+    expect(screen.getByText(/Retirer la plage 203\.0\.113\.0\/24/)).toHaveTextContent('2 soignants n\'ont pas encore de second facteur');
   });
 
   it('sans iam:policy:update : tout est en lecture seule', async () => {

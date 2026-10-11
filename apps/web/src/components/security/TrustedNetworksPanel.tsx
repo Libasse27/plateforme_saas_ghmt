@@ -8,7 +8,6 @@ import { formatDateTime } from '@/lib/format/dates';
 
 export interface TrustedNetworksPanelProps {
   readonly networks: readonly TrustedNetworkView[];
-  readonly sites: readonly { readonly id: string; readonly name: string }[];
   /** Adresse vue par le serveur pour cette requête (jamais lue côté navigateur). */
   readonly requestIp: string | null;
   readonly requestIpTrusted: boolean;
@@ -18,15 +17,8 @@ export interface TrustedNetworksPanelProps {
   readonly clinicalUsersWithoutMfa?: number;
 }
 
-const COLUMNS = [{ header: 'Plage' }, { header: 'Libellé' }, { header: 'Site' }, { header: 'Ajoutée' }, { header: 'Actions', hiddenHeader: true }] as const;
+const COLUMNS = [{ header: 'Plage' }, { header: 'Libellé' }, { header: 'Ajoutée' }, { header: 'Actions', hiddenHeader: true }] as const;
 const DEFAULT_LABEL = 'Mon adresse actuelle';
-const SITE_NONE = 'Aucun rattachement';
-const SITE_UNKNOWN = 'Site inconnu';
-
-function siteName(network: TrustedNetworkView, sites: TrustedNetworksPanelProps['sites']): string {
-  if (!network.siteId) return SITE_NONE;
-  return sites.find((site) => site.id === network.siteId)?.name ?? SITE_UNKNOWN;
-}
 
 /** « N soignants n'ont pas encore de second facteur » (accord au singulier compris) ; chaîne vide si aucun. */
 export function clinicalWithoutMfaSentence(count: number): string {
@@ -34,7 +26,7 @@ export function clinicalWithoutMfaSentence(count: number): string {
   return count === 1 ? '1 soignant n\'a pas encore de second facteur' : `${String(count)} soignants n'ont pas encore de second facteur`;
 }
 
-function NetworksTable({ networks, sites, canUpdate, timeZone, clinicalUsersWithoutMfa = 0 }: Pick<TrustedNetworksPanelProps, 'networks' | 'sites' | 'canUpdate' | 'timeZone' | 'clinicalUsersWithoutMfa'>) {
+function NetworksTable({ networks, canUpdate, timeZone, clinicalUsersWithoutMfa = 0 }: Pick<TrustedNetworksPanelProps, 'networks' | 'canUpdate' | 'timeZone' | 'clinicalUsersWithoutMfa'>) {
   const exposed = clinicalWithoutMfaSentence(clinicalUsersWithoutMfa);
   return (
     <DataTable caption="Plages réseau de confiance de l'établissement" columns={COLUMNS}>
@@ -42,7 +34,6 @@ function NetworksTable({ networks, sites, canUpdate, timeZone, clinicalUsersWith
         <tr key={network.id}>
           <Cell><code className="font-mono">{network.cidr}</code></Cell>
           <Cell>{network.label}</Cell>
-          <Cell>{siteName(network, sites)}</Cell>
           <Cell>
             {network.createdAt ? formatDateTime(network.createdAt, timeZone) : 'Date inconnue'}
             {network.createdBy ? <span className="block text-slate-700">{network.createdBy.fullName}</span> : null}
@@ -66,7 +57,7 @@ function NetworksTable({ networks, sites, canUpdate, timeZone, clinicalUsersWith
   );
 }
 
-function AddForms({ requestIp, sites }: Pick<TrustedNetworksPanelProps, 'requestIp' | 'sites'>) {
+function AddForms({ requestIp }: Pick<TrustedNetworksPanelProps, 'requestIp'>) {
   const current = currentNetworkCidr(requestIp);
   const suffix = current ? current.slice(current.lastIndexOf('/')) : '';
   return (
@@ -92,7 +83,6 @@ function AddForms({ requestIp, sites }: Pick<TrustedNetworksPanelProps, 'request
           fields={[
             { kind: 'text', name: 'cidr', label: 'Plage réseau (CIDR)', hint: 'Par exemple 203.0.113.0/24. Adresses publiques seulement, au moins /24 en IPv4 et /48 en IPv6.', required: true },
             { kind: 'text', name: 'label', label: 'Libellé', required: true },
-            { kind: 'select', name: 'siteId', label: 'Site (facultatif)', placeholder: SITE_NONE, options: sites.map((site) => ({ value: site.id, label: site.name })) },
             TOTP_CODE_FIELD,
           ]}
           submitLabel="Ajouter la plage"
@@ -104,7 +94,7 @@ function AddForms({ requestIp, sites }: Pick<TrustedNetworksPanelProps, 'request
 }
 
 /** Plages réseau de confiance (docs/11 D4) : adresse courante, liste, ajout, suppression confirmée. */
-export function TrustedNetworksPanel({ networks, sites, requestIp, requestIpTrusted, canUpdate, timeZone, clinicalUsersWithoutMfa = 0 }: TrustedNetworksPanelProps) {
+export function TrustedNetworksPanel({ networks, requestIp, requestIpTrusted, canUpdate, timeZone, clinicalUsersWithoutMfa = 0 }: TrustedNetworksPanelProps) {
   const address = requestIp
     ? `Votre adresse actuelle : ${requestIp} (réseau de confiance : ${requestIpTrusted ? 'oui' : 'non'}).`
     : 'Votre adresse actuelle n\'est pas connue du serveur.';
@@ -112,7 +102,7 @@ export function TrustedNetworksPanel({ networks, sites, requestIp, requestIpTrus
     <section aria-labelledby="reseaux" className="space-y-4">
       <h2 id="reseaux" className="text-lg font-semibold">Réseaux de confiance</h2>
       <p className="text-sm text-slate-800">
-        Depuis ces plages, les soignants n&apos;ont pas à activer le second facteur (selon la politique choisie). L&apos;adresse est vérifiée à chaque requête.
+        Depuis ces plages, les soignants n&apos;ont pas à activer le second facteur (selon la politique choisie). Une plage vaut pour tout l&apos;établissement ; l&apos;adresse est vérifiée à chaque requête.
       </p>
       <p className="text-sm font-medium text-slate-900">{address}</p>
       <div role="note" aria-label="Attention aux adresses partagées ou instables" className="rounded-md border-l-4 border-amber-700 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -122,9 +112,9 @@ export function TrustedNetworksPanel({ networks, sites, requestIp, requestIpTrus
       {networks.length === 0 ? (
         <p className="text-slate-700">Aucune plage déclarée : tous les réseaux sont hors confiance et le second facteur est exigé partout pour les soignants.</p>
       ) : (
-        <NetworksTable networks={networks} sites={sites} canUpdate={canUpdate} timeZone={timeZone} clinicalUsersWithoutMfa={clinicalUsersWithoutMfa} />
+        <NetworksTable networks={networks} canUpdate={canUpdate} timeZone={timeZone} clinicalUsersWithoutMfa={clinicalUsersWithoutMfa} />
       )}
-      {canUpdate ? <AddForms requestIp={requestIp} sites={sites} /> : <p className="text-sm text-slate-700">Lecture seule : seul l&apos;administrateur principal peut modifier les réseaux de confiance.</p>}
+      {canUpdate ? <AddForms requestIp={requestIp} /> : <p className="text-sm text-slate-700">Lecture seule : seul l&apos;administrateur principal peut modifier les réseaux de confiance.</p>}
     </section>
   );
 }

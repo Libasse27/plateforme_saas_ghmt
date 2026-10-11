@@ -53,7 +53,7 @@ export function ResetPasswordForm({ token, tenantSlug, emailMasked, mfaRequired 
         <TextField
           name="mfaCode"
           label="Code de vérification"
-          hint="Code à 6 chiffres de votre application d'authentification, ou un code de secours."
+          hint="Code à 6 chiffres de votre application d'authentification, ou un code de secours. Téléphone perdu ? Utilisez un code de secours ou contactez votre administrateur."
           required
           inputMode="text"
           autoComplete="one-time-code"

@@ -30,7 +30,7 @@ describe('loadEnv : paiements', () => {
   });
 
   it('désactive le sandbox en production par défaut et refuse de l’activer explicitement', () => {
-    const production = { ...BASE, NODE_ENV: 'production', RATE_LIMIT_STORE: 'redis', REDIS_URL: 'rediss://cache:6380', TRUSTED_PROXIES: '10.0.0.0/8', JWT_PLATFORM_SECRET: 'p'.repeat(40) };
+    const production = { ...BASE, NODE_ENV: 'production', WEB_URL: 'https://app.ghmt.sn', RATE_LIMIT_STORE: 'redis', REDIS_URL: 'rediss://cache:6380', TRUSTED_PROXIES: '10.0.0.0/8', JWT_PLATFORM_SECRET: 'p'.repeat(40) };
 
     expect(loadEnv(production).PAYMENTS_SANDBOX_ENABLED).toBe(false);
     expect(() => loadEnv({ ...production, PAYMENTS_SANDBOX_ENABLED: 'true' })).toThrow(/PAYMENTS_SANDBOX_ENABLED/);

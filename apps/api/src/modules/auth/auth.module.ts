@@ -13,6 +13,7 @@ import { LogoutService } from './services/logout.service';
 import { MfaEnrollmentService } from './services/mfa-enrollment.service';
 import { MfaVerifyService } from './services/mfa-verify.service';
 import { LoginDelayEventsService } from './services/login-delay-events.service';
+import { LoginContextService } from './services/login-context.service';
 import { LoginDelayService } from './services/login-delay.service';
 import { MfaCodeChecker } from './services/mfa-code-checker.service';
 import { PasswordResetService } from './services/password-reset.service';
@@ -41,6 +42,7 @@ import { TotpService } from './services/totp.service';
     PasswordChangeService,
     InvitationAcceptService,
     LoginDelayService,
+    LoginContextService,
     LoginDelayEventsService,
     MfaCodeChecker,
     PasswordResetService,

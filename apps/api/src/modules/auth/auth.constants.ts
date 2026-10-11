@@ -38,6 +38,8 @@ export const SESSION_TENANT_STATUSES: ReadonlySet<string> = new Set(['active', '
 export const SUSPICIOUS_LOGIN_THRESHOLD = 10;
 /** Depuis un réseau de confiance de l'établissement, le délai progressif est plafonné à 60 s (docs/11 décision 21). */
 export const TRUSTED_NETWORK_DELAY_CAP_SECONDS = 60;
+/** Décision 25 : une IP à l'origine d'une session du compte depuis moins de 90 jours est « connue ». */
+export const KNOWN_LOGIN_IP_WINDOW_MS = 90 * DAY_MS;
 /** Audit `auth.login.delayed` : au plus un par identifiant et par heure. */
 export const DELAYED_AUDIT_WINDOW_MS = 60 * MINUTE_MS;
 

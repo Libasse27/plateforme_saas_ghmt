@@ -152,12 +152,11 @@ describe('schémas de politique de sécurité', () => {
     expect(updateSecurityPolicySchema.safeParse({ clinicalMfa: 'disabled' }).success).toBe(false);
   });
 
-  it('createTrustedNetworkSchema exige un libellé de 2 à 80 caractères et un site facultatif', () => {
+  it('createTrustedNetworkSchema exige un libellé de 2 à 80 caractères ; un siteId n’est plus accepté (décision 26)', () => {
     expect(createTrustedNetworkSchema.parse({ cidr: ' 203.0.113.0/24 ', label: 'Siège' })).toEqual({ cidr: '203.0.113.0/24', label: 'Siège' });
     expect(createTrustedNetworkSchema.safeParse({ cidr: '203.0.113.0/24', label: 'S' }).success).toBe(false);
     expect(createTrustedNetworkSchema.safeParse({ cidr: '203.0.113.0/24', label: 'x'.repeat(81) }).success).toBe(false);
-    expect(createTrustedNetworkSchema.safeParse({ cidr: '203.0.113.0/24', label: 'Siège', siteId: 'pas-un-uuid' }).success).toBe(false);
-    expect(createTrustedNetworkSchema.safeParse({ cidr: '203.0.113.0/24', label: 'Siège', siteId: TENANT }).success).toBe(true);
+    expect(createTrustedNetworkSchema.parse({ cidr: '203.0.113.0/24', label: 'Siège', siteId: TENANT })).not.toHaveProperty('siteId');
     expect(createTrustedNetworkSchema.safeParse({ cidr: '', label: 'Siège' }).success).toBe(false);
   });
 

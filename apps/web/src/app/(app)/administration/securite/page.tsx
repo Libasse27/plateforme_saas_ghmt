@@ -8,7 +8,7 @@ import { TrustedNetworksPanel } from '@/components/security/TrustedNetworksPanel
 import { settle } from '@/lib/api/settle';
 import { hasPermission } from '@/lib/auth/me';
 import { toSecurityPolicy, isOwnerOf } from '@/lib/domain/security';
-import { toSiteAdmin, toUserSummary } from '@/lib/domain/admin';
+import { toUserSummary } from '@/lib/domain/admin';
 import { pageApi } from '@/server/api';
 import { requireMe } from '@/server/me';
 import { loadOptional } from '../_lib/page-data';
@@ -27,10 +27,10 @@ export default async function SecurityPage() {
   const canUpdate = hasPermission(me, 'iam:policy:update');
   const viewerIsOwner = isOwnerOf(policy, me.user.id);
 
-  const [sites, users] = await Promise.all([
-    loadOptional(hasPermission(me, 'org:site:read'), '/org/sites', toSiteAdmin),
-    loadOptional(viewerIsOwner && canUpdate && hasPermission(me, 'iam:user:read'), '/iam/users', toUserSummary, { status: 'active', limit: CANDIDATES_LIMIT }),
-  ]);
+  const users = await loadOptional(viewerIsOwner && canUpdate && hasPermission(me, 'iam:user:read'), '/iam/users', toUserSummary, {
+    status: 'active',
+    limit: CANDIDATES_LIMIT,
+  });
   const candidates = users.filter((user) => user.id !== me.user.id && user.status === 'active');
 
   return (
@@ -40,11 +40,11 @@ export default async function SecurityPage() {
         <SecurityPolicyForm policy={policy} canUpdate={canUpdate} />
         <TrustedNetworksPanel
           networks={policy.trustedNetworks}
-          sites={sites}
           requestIp={policy.requestIp}
           requestIpTrusted={policy.requestIpTrusted}
           canUpdate={canUpdate}
           timeZone={me.tenant.timezone}
+          clinicalUsersWithoutMfa={policy.clinicalUsersWithoutMfa}
         />
         <section aria-labelledby="principal" className="space-y-3">
           <h2 id="principal" className="text-lg font-semibold">Administrateur principal</h2>

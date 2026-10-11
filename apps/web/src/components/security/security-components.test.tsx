@@ -19,17 +19,14 @@ import { SecurityPolicyForm } from './SecurityPolicyForm';
 import { TrustedNetworksPanel } from './TrustedNetworksPanel';
 
 const NETWORK_ID = '0190c1a0-1111-7000-8000-000000000001';
-const SITE_ID = '0190c1a0-2222-7000-8000-000000000002';
 
 const NETWORK: TrustedNetworkView = {
   id: NETWORK_ID,
   cidr: '203.0.113.0/24',
   label: 'Siège',
-  siteId: SITE_ID,
   createdAt: '2026-10-05T08:00:00.000Z',
   createdBy: { id: 'u1', fullName: 'Awa Diop' },
 };
-const SITES = [{ id: SITE_ID, name: 'Dakar Plateau' }];
 
 beforeEach(() => {
   for (const mock of [updatePolicy, addNetwork, removeNetwork, transfer]) mock.mockReset();
@@ -37,7 +34,7 @@ beforeEach(() => {
 
 function panel(overrides: Partial<React.ComponentProps<typeof TrustedNetworksPanel>> = {}) {
   return render(
-    <TrustedNetworksPanel networks={[NETWORK]} sites={SITES} requestIp="198.51.100.7" requestIpTrusted={false} canUpdate timeZone="Africa/Dakar" {...overrides} />,
+    <TrustedNetworksPanel networks={[NETWORK]} requestIp="198.51.100.7" requestIpTrusted={false} canUpdate timeZone="Africa/Dakar" {...overrides} />,
   );
 }
 
@@ -55,13 +52,13 @@ describe('TrustedNetworksPanel', () => {
     expect(screen.queryByRole('button', { name: /Ajouter ce réseau/ })).not.toBeInTheDocument();
   });
 
-  it('liste les plages avec leur libellé, leur site et leur auteur', () => {
+  it('liste les plages avec leur libellé et leur auteur, sans colonne de site (décision 26)', () => {
     panel();
     const table = screen.getByRole('table', { name: /Plages réseau de confiance/ });
     const row = within(table).getByText('203.0.113.0/24').closest('tr') as HTMLElement;
     expect(row).toHaveTextContent('Siège');
-    expect(row).toHaveTextContent('Dakar Plateau');
     expect(row).toHaveTextContent('Awa Diop');
+    expect(within(table).queryByRole('columnheader', { name: 'Site' })).not.toBeInTheDocument();
   });
 
   it('aucune plage : explique que tous les réseaux sont hors confiance', () => {
@@ -107,18 +104,18 @@ describe('TrustedNetworksPanel', () => {
     expect(screen.getByRole('button', { name: 'Ajouter ce réseau (/32)' })).toBeInTheDocument();
   });
 
-  it('le formulaire d\'ajout envoie la plage, le libellé et le site facultatif', async () => {
+  it('le formulaire d\'ajout envoie la plage et le libellé, sans champ de site', async () => {
     addNetwork.mockResolvedValue({});
     const user = userEvent.setup();
     panel({ requestIp: null });
     await user.type(screen.getByLabelText(/Plage réseau/), '10.20.0.0/16');
     await user.type(screen.getByLabelText(/^Libellé/), 'LAN clinique');
-    await user.selectOptions(screen.getByLabelText(/Site/), SITE_ID);
+    expect(screen.queryByLabelText(/Site/)).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Ajouter la plage' }));
     const data = addNetwork.mock.calls[0]?.[1] as FormData;
     expect(data.get('cidr')).toBe('10.20.0.0/16');
     expect(data.get('label')).toBe('LAN clinique');
-    expect(data.get('siteId')).toBe(SITE_ID);
+    expect(data.get('siteId')).toBeNull();
   });
 
   it('affiche l\'erreur de champ du serveur (plage trop large)', async () => {
@@ -137,11 +134,6 @@ describe('TrustedNetworksPanel', () => {
     expect(screen.getByText(/Les soignants connectés depuis cette plage devront utiliser le second facteur/)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Confirmer la suppression' }));
     expect((removeNetwork.mock.calls[0]?.[1] as FormData).get('networkId')).toBe(NETWORK_ID);
-  });
-
-  it('siège inconnu : tolère une plage rattachée à un site absent de la liste', () => {
-    panel({ sites: [] });
-    expect(screen.getByText('203.0.113.0/24').closest('tr')).toHaveTextContent('Site inconnu');
   });
 });
 

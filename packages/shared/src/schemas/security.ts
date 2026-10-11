@@ -270,7 +270,6 @@ export type UpdateSecurityPolicyInput = z.infer<typeof updateSecurityPolicySchem
 export const createTrustedNetworkSchema = z.object({
   cidr: z.string().trim().min(3).max(64),
   label: z.string().trim().min(2).max(80),
-  siteId: uuid.optional(),
   totpCode: totpCodeField,
 });
 export type CreateTrustedNetworkInput = z.infer<typeof createTrustedNetworkSchema>;
@@ -296,7 +295,6 @@ export interface TrustedNetworkView {
   readonly id: string;
   readonly cidr: string;
   readonly label: string;
-  readonly siteId: string | null;
   readonly createdAt: string;
   readonly createdBy: { readonly id: string; readonly fullName: string } | null;
 }

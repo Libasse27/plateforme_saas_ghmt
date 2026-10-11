@@ -173,7 +173,7 @@ Clés composites `(tenant_id, id)`, `id uuid` v7, RLS sur toutes les tables.
 - Index `(tenant_id, session_id, created_at DESC)`.
 
 **`tenant.trusted_networks`** (modèle `TrustedNetwork`)
-- Colonnes : `id`, `tenant_id`, `network inet` (forme réseau normalisée, Prisma `@db.Inet`), `label varchar(80)`, `site_id uuid` (nullable, FK composite `tenant.sites`), `created_by`, `created_at`, `deleted_at`.
+- Colonnes : `id`, `tenant_id`, `network inet` (forme réseau normalisée, Prisma `@db.Inet`), `label varchar(80)`, `created_by`, `created_at`, `deleted_at`.
 - `CHECK (masklen(network) >= CASE family(network) WHEN 4 THEN 16 ELSE 32 END)`.
 - `CHECK (network = set_masklen(network(network)::inet, masklen(network)))`.
 - `uq_trusted_networks_active (tenant_id, network) WHERE deleted_at IS NULL`.
@@ -274,17 +274,17 @@ Les limites existantes sont inchangées (`auth.constants.ts`).
 |---|---|---|---|---|---|
 | GET | `/iam/security/policy` | `iam:policy:read` | — | `SecurityPolicyView` | — |
 | PUT | `/iam/security/policy` | `iam:policy:update` | `updateSecurityPolicySchema { clinicalMfa: 'off_network'\|'always' }` | `SecurityPolicyView` | 422 |
-| POST | `/iam/security/trusted-networks` | `iam:policy:update` | `createTrustedNetworkSchema { cidr, label, siteId? }` | 201 `TrustedNetworkView` | 422 `invalid_cidr`, `cidr_too_broad`, `trusted_network_limit` (50), `scope_not_found` (site) ; 409 `trusted_network_exists` |
+| POST | `/iam/security/trusted-networks` | `iam:policy:update` | `createTrustedNetworkSchema { cidr, label }` | 201 `TrustedNetworkView` | 422 `invalid_cidr`, `cidr_too_broad`, `cidr_reserved`, `trusted_network_limit` (50) ; 409 `trusted_network_exists` |
 | DELETE | `/iam/security/trusted-networks/{id}` | `iam:policy:update` | — | 204 | 404 |
 | POST | `/iam/security/owner` | `iam:policy:update` **et** être le principal | `transferOwnershipSchema { userId }` | 200 `SecurityPolicyView` | 403 `owner_required` ; 422 `owner_target_invalid` (pas administrateur actif à portée établissement, ou pas de TOTP actif, ou soi-même) |
 
 Vues :
 - `SecurityPolicyView = { clinicalMfa, trustedNetworks: TrustedNetworkView[], requestIp: string | null, requestIpTrusted: boolean, owner: { id, fullName } | null, updatedAt: string | null }` ;
-- `TrustedNetworkView = { id, cidr, label, siteId | null, createdAt, createdBy: { id, fullName } | null }`.
+- `TrustedNetworkView = { id, cidr, label, createdAt, createdBy: { id, fullName } | null }`.
 
 Audit :
 - `iam.security.policy_updated` (`{ clinicalMfa }`) ;
-- `iam.security.trusted_network_added` / `_removed` (`{ cidr, label, siteId }`) ;
+- `iam.security.trusted_network_added` / `_removed` (`{ cidr, label }`) ;
 - `iam.owner.transferred` (`{ fromUserId, toUserId }`).
 
 **Évaluation** :
@@ -431,7 +431,7 @@ Vérification :
 - `resetPasswordSchema` (`newPassword: passwordSchema`, `mfaCode` au motif de `mfaVerifySchema`) ;
 - `mfaSetupSchema` (`emailCode` `^\d{6}$` facultatif) ;
 - `updateSecurityPolicySchema` ;
-- `createTrustedNetworkSchema` (`cidr` validé par `parseCidr`, `label` 2..80, `siteId` uuid facultatif) ;
+- `createTrustedNetworkSchema` (`cidr` validé par `parseCidr`, `label` 2..80) ;
 - `transferOwnershipSchema`.
 
 **Fonction pure** : `parseCidr(value) ⇒ { family, prefix, network } | null` (sans dépendance).
@@ -779,9 +779,9 @@ Toutes arbitrées par l'utilisateur le 2026-10-05, conformément aux recommandat
 22. (2026-10-06) L'agent administratif (admissions) est clinique ; les permissions de stock pharmacie (`pharmacy:drug:read`, `pharmacy:stock_movement:*`) **ne rendent pas** clinique.
 23. (2026-10-06) Opérations de pouvoir : réseaux de confiance et politique MFA réservés au principal ; modifier un rôle affecté pour lui ajouter une permission d'administration en écriture est réservé au principal ; code TOTP récent exigé pour le transfert, les réseaux et la politique ; motif obligatoire pour la réinitialisation MFA et le déverrouillage ; alertes aux directeurs et au principal ; modèles `security.*` non personnalisables ; plages ≥ /24 (IPv4) et ≥ /48 (IPv6), plages privées et spéciales refusées.
 
-24. (2026-10-10) Panne ou latence de Redis : **repli prudent** du délai progressif. La mémoire par instance reste le repli, mais pendant la panne toute nouvelle tentative sur un identifiant déjà en échec dans cette instance est refusée (`429 login_delayed`) et les admissions de l'instance sont plafonnées. L'état dégradé est exposé dans `/health/ready` et journalisé à l'entrée et à la sortie. Remplace le « repli fermé » du §14.3.6.
-25. (2026-10-10) Blocage ciblé d'un compte (conséquence de D3) : depuis un réseau de confiance de l'établissement, ou une IP déjà utilisée avec succès par ce compte, le délai dû aux échecs venus d'ailleurs ne s'applique pas (compteur secondaire compte + IP). Le compteur par compte seul reste la règle partout ailleurs.
-26. (2026-10-10) `siteId` des réseaux de confiance **retiré** du contrat, du stockage applicatif et de la console : une plage vaut pour tout l'établissement. Le rattachement par site reviendra avec le lot multi-sites.
+24. (2026-10-10) Panne ou latence de Redis : **repli prudent** du délai progressif. La mémoire par instance reste le repli, mais pendant la panne toute nouvelle tentative sur un identifiant déjà en échec dans cette instance est refusée (`429 login_delayed`) et les admissions de l'instance sont plafonnées. L'état dégradé est exposé dans `/health/ready` et journalisé à l'entrée et à la sortie. Remplace le « repli fermé » du §14.3.6. Mise en œuvre : refus pendant 60 s d'un identifiant dont un échec date de la panne en cours, 60 admissions par minute et par instance, état `checks.rateLimit` de `/health/ready`.
+25. (2026-10-10) Blocage ciblé d'un compte (conséquence de D3) : depuis un réseau de confiance de l'établissement, ou une IP déjà utilisée avec succès par ce compte, le délai dû aux échecs venus d'ailleurs ne s'applique pas (compteur secondaire compte + IP). Le compteur par compte seul reste la règle partout ailleurs. Mise en œuvre : IP « connue » = IP d'une session du compte ouverte depuis moins de 90 jours (IPv6 comparée par /64) ; le contexte n'est évalué que si le compteur du compte impose un délai ; le compteur compte + IP suit le barème (plafond de 60 s sur réseau de confiance) ; une réussite n'efface que le compteur qui l'a admise (les échecs venus d'ailleurs demeurent), le déverrouillage efface le compteur du compte.
+26. (2026-10-10) `siteId` des réseaux de confiance **retiré** du contrat, du stockage applicatif et de la console : une plage vaut pour tout l'établissement. Le rattachement par site reviendra avec le lot multi-sites. Migration `20261006000150` : colonne `site_id` supprimée, contrainte ≥ /24 / ≥ /48 en base (plages plus larges existantes retirées).
 
 ## 14. Correctifs des revues sécurité et santé (2026-10-06)
 
@@ -818,7 +818,7 @@ Revues du 2026-10-06 sur le travail non commité. Mêmes règles qu'au §0.3 : c
 3. **M7 (santé)** : purge des `signup_verifications` des tenants expirés ; anonymisation de l'utilisateur fondateur 30 jours après l'expiration (nom, e-mail remplacés, mot de passe et sessions supprimés), avec un audit plateforme.
 4. **B6 (sécurité)** : e-mail de vérification avec un libellé fixe (sans nom d'établissement ni nom saisi) et limite par adresse de destination.
 5. Runbook : procédure d'astreinte (téléphone perdu la nuit, au moins deux administrateurs avec un TOTP actif), procédure de transfert du principal (demande écrite de la direction, second opérateur, options du script).
-6. Annexe de docs/06 : repli fermé du délai progressif si Redis est indisponible, changement d'e-mail par un administrateur, code d'enrôlement remis en main propre, revue des accès hors réseau.
+6. Annexe de docs/06 : repli prudent du délai progressif si Redis est indisponible (décision 24), changement d'e-mail par un administrateur, code d'enrôlement remis en main propre, revue des accès hors réseau.
 
 ### 14.4 WEB
 1. **H1 (sécurité)** : `matcher` de `proxy.ts` qui couvre les chemins à jeton (exclusion par liste d'extensions statiques), avec un test qui évalue le `matcher` sur `/reinitialiser/<uuid>.<secret>`.

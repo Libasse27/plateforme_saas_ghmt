@@ -111,6 +111,7 @@ describe('TotpEnrolment : étape « code par e-mail » hors réseau de confiance
     const field = await screen.findByLabelText(/Code reçu par e-mail/);
     expect(field).toHaveAttribute('inputmode', 'numeric');
     expect(field).toHaveAttribute('autocomplete', 'one-time-code');
+    expect(field).toHaveAccessibleDescription(expect.stringContaining('Pas d\'accès à votre e-mail ? Contactez votre administrateur.'));
     expect(screen.getByRole('button', { name: 'Renvoyer le code' })).toBeEnabled();
   });
 

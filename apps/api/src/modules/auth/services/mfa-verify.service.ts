@@ -2,7 +2,6 @@ import { Injectable } from '@nestjs/common';
 import type { MfaVerifyInput, SessionTokens } from '@ghmt/shared';
 import { AuditService } from '../../../common/audit/audit.service';
 import { parseOpaqueToken } from '../../../common/auth/opaque-token';
-import { AuthorizationService } from '../../../common/authz/authorization.service';
 import { DomainError } from '../../../common/errors/domain-error';
 import { Clock } from '../../../common/time/clock';
 import { TenantDb, type TenantTx } from '../../../infrastructure/prisma/tenant-db.service';
@@ -13,7 +12,7 @@ import { LoginCompletionService } from './login-completion.service';
 import { LoginDelayEventsService } from './login-delay-events.service';
 import { LoginDelayService } from './login-delay.service';
 import { MfaCodeChecker, type FactorSnapshot } from './mfa-code-checker.service';
-import { SessionService } from './session.service';
+import { LoginContextService } from './login-context.service';
 
 /** Issue de la transaction de vérification ; `released` : challenge pris ou devenu invalide entre-temps (pas un échec). */
 type AttemptResult = { kind: 'ok'; tokens: SessionTokens } | { kind: 'released' } | { kind: 'wrong_code'; userId: string; fullName: string };
@@ -49,8 +48,7 @@ export class MfaVerifyService {
     private readonly tenantDb: TenantDb,
     private readonly codes: MfaCodeChecker,
     private readonly audit: AuditService,
-    private readonly authz: AuthorizationService,
-    private readonly sessions: SessionService,
+    private readonly contexts: LoginContextService,
     private readonly completion: LoginCompletionService,
     private readonly delay: LoginDelayService,
     private readonly delayEvents: LoginDelayEventsService,
@@ -67,7 +65,7 @@ export class MfaVerifyService {
     if (!preflight) throw invalidMfa();
     const { tenantSlug, email } = preflight;
     // Contrôle et réservation atomiques AVANT toute vérification du code, hors transaction.
-    const admission = await this.delay.admit(tenantSlug, email, now, () => this.fromTrustedNetwork(tenantId));
+    const admission = await this.delay.admit(tenantSlug, email, now, () => this.contexts.evaluate(tenantId, email, now));
     if (!admission.allowed) {
       await this.delayEvents.delayed(tenantSlug, email, admission.retryAfterSeconds, 'mfa');
       throw DomainError.loginDelayed(admission.retryAfterSeconds);
@@ -76,11 +74,11 @@ export class MfaVerifyService {
     // Les essais, l'échec et l'audit sont validés (commit) avant de lever l'erreur.
     const outcome = await this.tenantDb.runAs(tenantId, (tx) => this.attempt(tx, tenantId, hash, input.code, now));
     if (outcome.kind === 'ok') {
-      await this.delay.clear(tenantSlug, email);
+      await this.delay.clear(tenantSlug, email, admission);
       return outcome.tokens;
     }
     if (outcome.kind === 'released') {
-      await this.delay.release(tenantSlug, email);
+      await this.delay.release(admission);
       throw invalidMfa();
     }
     await this.delayEvents.failureCounted({ tenantId, tenantSlug, userId: outcome.userId, email, fullName: outcome.fullName, count: admission.count });
@@ -91,11 +89,6 @@ export class MfaVerifyService {
     const pending = await this.loadPending(tx, tenantId, tokenHash, now);
     if (!pending) return undefined;
     return { tenantSlug: (await loadTenantProfile(tx)).slug, email: pending.email };
-  }
-
-  /** IP de la requête dans une plage de confiance de l'établissement (lecture dans sa propre transaction, courte). */
-  private fromTrustedNetwork(tenantId: string): Promise<boolean> {
-    return this.tenantDb.runAs(tenantId, async (tx) => (await this.authz.loadNetworkPolicy(tx, this.sessions.clientMeta().ip)).networkTrusted);
   }
 
   private async attempt(tx: TenantTx, tenantId: string, tokenHash: Uint8Array<ArrayBuffer>, code: string, now: Date): Promise<AttemptResult> {

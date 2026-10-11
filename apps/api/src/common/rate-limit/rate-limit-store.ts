@@ -33,8 +33,6 @@ export interface RateLimitStore {
    * (0 : refus tant que la fenêtre est pleine, sans blocage prolongé).
    */
   hit(key: string, ttlMs: number, limit: number, blockMs: number): Promise<WindowHit>;
-  /** Incrémente le compteur d'échecs, date le dernier échec et prolonge l'expiration de `ttlMs`. */
-  recordFailure(key: string, ttlMs: number, nowMs: number): Promise<FailureRecord>;
   /**
    * ATOMIQUE : décide si une tentative est examinée et, si oui, la compte aussitôt comme un échec (réservation) ; une connexion
    * réussie la libère (`reset`/`release`). Deux tentatives parallèles ne peuvent donc pas franchir le même palier.

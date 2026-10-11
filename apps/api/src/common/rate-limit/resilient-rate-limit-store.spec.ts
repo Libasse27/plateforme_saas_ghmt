@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryRateLimitStore } from './memory-rate-limit-store';
-import { ResilientRateLimitStore } from './resilient-rate-limit-store';
+import { PRUDENT_ADMISSIONS_PER_MINUTE, PRUDENT_RETRY_AFTER_MS, ResilientRateLimitStore } from './resilient-rate-limit-store';
 import type { RateLimitStore } from './rate-limit-store';
 
 function brokenStore(): RateLimitStore {
   const fail = () => Promise.reject(new Error('redis indisponible'));
-  return { hit: fail, recordFailure: fail, gate: fail, release: fail, get: fail, reset: fail };
+  return { hit: fail, gate: fail, release: fail, get: fail, reset: fail };
 }
 
 function setup(primary: RateLimitStore) {
@@ -37,18 +37,53 @@ describe('ResilientRateLimitStore', () => {
     expect(store.isDegraded()).toBe(true);
   });
 
+  it('repli prudent (décision 24) : un identifiant déjà en échec pendant la panne est refusé, quel que soit le barème', async () => {
+    const { store } = setup(brokenStore());
+    const schedule = [0, 0, 0, 0, 30];
+    expect((await store.gate('login', 60_000, 1, schedule, null)).allowed).toBe(true);
+    const refused = await store.gate('login', 60_000, 2, schedule, null);
+    expect(refused).toEqual({ allowed: false, retryAfterMs: PRUDENT_RETRY_AFTER_MS, count: 1 });
+    // Une réservation rendue (mot de passe juste devant un second facteur) ne laisse pas d'échec : l'identifiant repasse.
+    await store.release('login');
+    expect((await store.gate('login', 60_000, 3, schedule, null)).allowed).toBe(true);
+  });
+
+  it('repli prudent : un échec antérieur à la panne (mémoire résiduelle) ne bloque pas l’identifiant', async () => {
+    const primary = new MemoryRateLimitStore();
+    vi.spyOn(primary, 'gate').mockRejectedValueOnce(new Error('coupure'));
+    const { store, advance } = setup(primary);
+    expect((await store.gate('login', 3_600_000, 1, [0, 0, 0, 0, 30], null)).allowed).toBe(true);
+    advance(6_000);
+    await store.hit('ping', 1_000, 5, 0);
+    expect(store.isDegraded()).toBe(false);
+    vi.spyOn(primary, 'gate').mockRejectedValue(new Error('coupure'));
+    advance(1_000);
+    expect((await store.gate('login', 3_600_000, 2, [0, 0, 0, 0, 30], null)).allowed).toBe(true);
+  });
+
+  it('repli prudent : les admissions de l’instance sont plafonnées par minute pendant la panne', async () => {
+    const { store, advance } = setup(brokenStore());
+    for (let i = 0; i < PRUDENT_ADMISSIONS_PER_MINUTE; i += 1) {
+      expect((await store.gate(`id-${i}`, 60_000, 1, [0], null)).allowed).toBe(true);
+    }
+    const capped = await store.gate('id-extra', 60_000, 1, [0], null);
+    expect(capped.allowed).toBe(false);
+    expect(capped.retryAfterMs).toBeGreaterThan(0);
+    advance(60_001);
+    expect((await store.gate('id-extra', 60_000, 1, [0], null)).allowed).toBe(true);
+  });
+
   it('applique aussi le compteur d’échecs en repli', async () => {
     const { store } = setup(brokenStore());
-    await store.recordFailure('f', 60_000, 1);
-    expect(await store.recordFailure('f', 60_000, 2)).toEqual({ count: 2, lastAtMs: 2 });
-    expect(await store.get('f')).toEqual({ count: 2, lastAtMs: 2 });
+    await store.gate('f', 60_000, 1, [0], null);
+    expect(await store.get('f')).toEqual({ count: 1, lastAtMs: 1 });
     await store.reset('f');
     expect(await store.get('f')).toBeNull();
   });
 
   it('journalise une seule fois l’entrée en mode dégradé, même si la panne dure (pas un message par requête ni par minute)', async () => {
     const { store, logs, recoveries, advance } = setup(brokenStore());
-        await store.hit('a', 1_000, 5, 0);
+    await store.hit('a', 1_000, 5, 0);
     await store.hit('b', 1_000, 5, 0);
     for (let i = 0; i < 30; i += 1) {
       advance(6_000);

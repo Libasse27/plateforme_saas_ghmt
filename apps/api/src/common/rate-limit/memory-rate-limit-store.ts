@@ -38,15 +38,6 @@ export class MemoryRateLimitStore implements RateLimitStore {
     return Promise.resolve(exceeded ? this.refusal(entry, now) : { totalHits: hits, timeToExpireMs: entry.windowEndsAt - now, isBlocked: false, timeToBlockExpireMs: 0 });
   }
 
-  recordFailure(key: string, ttlMs: number, nowMs: number): Promise<FailureRecord> {
-    this.sweepOccasionally();
-    const current = this.failures.get(key);
-    const alive = current && current.expiresAt > this.now() ? current : undefined;
-    const entry: FailureEntry = { count: (alive?.count ?? 0) + 1, lastAtMs: nowMs, expiresAt: this.now() + ttlMs };
-    this.failures.set(key, entry);
-    return Promise.resolve({ count: entry.count, lastAtMs: entry.lastAtMs });
-  }
-
   gate(key: string, ttlMs: number, nowMs: number, scheduleSeconds: readonly number[], capSeconds: number | null): Promise<AttemptGate> {
     this.sweepOccasionally();
     const stored = this.failures.get(key);

@@ -16,6 +16,7 @@ import { loadTenantProfile } from '../../../infrastructure/tenancy/tenant-profil
 import { maskEmail } from '../../notifications/domain/masking';
 import { PASSWORD_RESET_MAX_MFA_ATTEMPTS, PASSWORD_RESET_REISSUE_AFTER_MS, PASSWORD_RESET_TTL_MS, SESSION_TENANT_STATUSES, TOTP_KIND } from '../auth.constants';
 import { LoginDelayEventsService } from './login-delay-events.service';
+import { LoginContextService } from './login-context.service';
 import { LoginDelayService, type LoginAdmission } from './login-delay.service';
 import { MfaCodeChecker, type FactorSnapshot } from './mfa-code-checker.service';
 import { invalidatePasswordResetTokens } from './password-reset-tokens';
@@ -62,6 +63,7 @@ export class PasswordResetService {
     private readonly codes: MfaCodeChecker,
     private readonly sessions: SessionService,
     private readonly delay: LoginDelayService,
+    private readonly contexts: LoginContextService,
     private readonly delayEvents: LoginDelayEventsService,
     private readonly background: BackgroundTasks,
     private readonly clock: Clock,
@@ -105,7 +107,7 @@ export class PasswordResetService {
 
     // Les essais de second facteur et l'audit sont validés (commit) avant de lever l'erreur.
     const outcome = await this.tenantDb.runAs(tenantId, (tx) => this.attemptReset(tx, tenantId, hash, newHash, input.mfaCode));
-    if (outcome.kind === 'done') return this.confirm(outcome);
+    if (outcome.kind === 'done') return this.confirm(outcome, admission);
     if (identity && admission) await this.afterRefusal(tenantId, identity, admission, outcome);
     if (outcome.kind === 'wrong_code') throw DomainError.unprocessable('invalid_code', 'Code de vérification invalide.');
     throw this.preflightError(outcome.kind);
@@ -126,11 +128,11 @@ export class PasswordResetService {
     return { kind: 'ready', delayIdentity: { tenantSlug: (await loadTenantProfile(tx)).slug, email: loaded.email } };
   }
 
-  /** Contrôle et réservation atomiques avant la vérification du code (plafond de 60 s sur réseau de confiance). */
+  /** Contrôle et réservation atomiques avant la vérification du code (contexte connu : décisions 21 et 25). */
   private async admit(tenantId: string, identity: DelayIdentity): Promise<LoginAdmission> {
     const { tenantSlug, email } = identity;
-    const trusted = () => this.tenantDb.runAs(tenantId, async (tx) => (await this.authz.loadNetworkPolicy(tx, this.sessions.clientMeta().ip)).networkTrusted);
-    const admission = await this.delay.admit(tenantSlug, email, this.clock.now(), trusted);
+    const now = this.clock.now();
+    const admission = await this.delay.admit(tenantSlug, email, now, () => this.contexts.evaluate(tenantId, email, now));
     if (admission.allowed) return admission;
     await this.delayEvents.delayed(tenantSlug, email, admission.retryAfterSeconds, 'password_reset');
     throw DomainError.loginDelayed(admission.retryAfterSeconds);
@@ -139,14 +141,14 @@ export class PasswordResetService {
   /** Après le commit : code faux compté (alerte au seuil) ; jeton devenu invalide entre-temps : réservation rendue. */
   private async afterRefusal(tenantId: string, identity: DelayIdentity, admission: LoginAdmission, outcome: ResetOutcome): Promise<void> {
     if (outcome.kind !== 'wrong_code') {
-      await this.delay.release(identity.tenantSlug, identity.email);
+      await this.delay.release(admission);
       return;
     }
     await this.delayEvents.failureCounted({ tenantId, ...identity, userId: outcome.userId, fullName: outcome.fullName, count: admission.count });
   }
 
-  private async confirm(outcome: Extract<ResetOutcome, { kind: 'done' }>): Promise<void> {
-    await this.delay.clear(outcome.tenantSlug, outcome.email);
+  private async confirm(outcome: Extract<ResetOutcome, { kind: 'done' }>, admission: LoginAdmission | undefined): Promise<void> {
+    await this.delay.clear(outcome.tenantSlug, outcome.email, admission);
     this.background.run('confirmation de réinitialisation', async () => {
       await this.sendQuietly(
         buildPasswordChangedEmail({ to: outcome.email, fullName: outcome.fullName, tenantName: outcome.tenantName, tenantSlug: outcome.tenantSlug, webUrl: this.env.WEB_URL }),

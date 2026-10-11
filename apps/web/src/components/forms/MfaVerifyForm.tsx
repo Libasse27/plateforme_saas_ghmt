@@ -22,7 +22,7 @@ export function MfaVerifyForm({ next, action = mfaVerifyAction }: MfaVerifyFormP
       <TextField
         name="code"
         label="Code de vérification"
-        hint="Code à 6 chiffres de votre application d'authentification, ou code de secours."
+        hint="Code à 6 chiffres de votre application d'authentification, ou code de secours. Téléphone perdu ? Utilisez un code de secours ou contactez votre administrateur."
         required
         autoComplete="one-time-code"
         inputMode="numeric"

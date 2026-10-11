@@ -5,6 +5,7 @@ import { revokeAssignmentAction, updateUserAction } from '@/actions/admin-users'
 import { AssignmentForm } from '@/components/admin/AssignmentForm';
 import { ConfirmAction } from '@/components/admin/ConfirmAction';
 import { UserActions } from '@/components/admin/UserActions';
+import { mfaLabel } from '@/components/admin/UsersTable';
 import { ActionForm } from '@/components/forms/ActionForm';
 import { AccessDenied } from '@/components/ui/AccessDenied';
 import { Alert } from '@/components/ui/Alert';
@@ -53,8 +54,15 @@ export default async function UserPage({ params }: { readonly params: Promise<{ 
           Dernière connexion : {user.lastLoginAt ? formatDateTime(user.lastLoginAt, tz) : 'jamais'}
           {' · '}Dernière activité : {user.lastSeenAt ? formatDateTime(user.lastSeenAt, tz) : 'jamais'}
           {user.mustChangePassword ? ' · mot de passe à changer à la prochaine connexion' : ''}
+          {' · '}Second facteur : {mfaLabel(user.mfaEnrolled).toLowerCase()}
+          {user.loginDelayed ? ' · connexion ralentie (échecs répétés)' : ''}
         </p>
-        <UserActions userId={id} status={user.status} rights={{ update: canUpdateUser, resetMfa: canUpdateUser && id !== me.user.id, create: hasPermission(me, 'iam:user:create'), revokeSessions: hasPermission(me, 'iam:session:delete') }} />
+        <UserActions
+          userId={id}
+          status={user.status}
+          rights={{ update: canUpdateUser, resetMfa: canUpdateUser && id !== me.user.id, create: hasPermission(me, 'iam:user:create'), revokeSessions: hasPermission(me, 'iam:session:delete') }}
+          flags={{ mfaEnrolled: user.mfaEnrolled, loginDelayed: user.loginDelayed }}
+        />
         {canUpdateUser ? (
           <section aria-labelledby="identite" className="max-w-xl rounded-md border border-slate-300 bg-white p-4">
             <h2 id="identite" className="mb-3 text-lg font-semibold">Identité</h2>

@@ -93,7 +93,7 @@ describe('trustedNetworkForm', () => {
   it('valide la plage, le libellé et le site facultatif', () => {
     expect(trustedNetworkForm({ cidr: '203.0.113.9/24', label: '  Siège  ', siteId: UUID, totpCode: '123 456' })).toEqual({
       ok: true,
-      data: { cidr: '203.0.113.0/24', label: 'Siège', siteId: UUID, totpCode: '123456' },
+      data: { cidr: '203.0.113.0/24', label: 'Siège', totpCode: '123456' },
     });
     expect(trustedNetworkForm({ cidr: '203.0.113.0/24', label: 'Siège', siteId: '', totpCode: '123456' })).toEqual({ ok: true, data: { cidr: '203.0.113.0/24', label: 'Siège', totpCode: '123456' } });
   });
@@ -105,7 +105,6 @@ describe('trustedNetworkForm', () => {
       errors: {
         cidr: expect.stringContaining('trop large') as unknown,
         label: expect.stringContaining('2') as unknown,
-        siteId: expect.any(String) as unknown,
         totpCode: expect.any(String) as unknown,
       },
     });

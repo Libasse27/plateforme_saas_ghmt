@@ -10,7 +10,6 @@ interface NetworkRow {
   readonly id: string;
   readonly network: string;
   readonly label: string;
-  readonly siteId: string | null;
   readonly createdAt: Date;
   readonly createdBy: string | null;
 }
@@ -55,7 +54,7 @@ export class SecurityPolicyReader {
 
   async networks(tx: TenantTx): Promise<TrustedNetworkView[]> {
     const rows = await tx.$queryRaw<NetworkRow[]>`
-      SELECT n.id::text AS id, host(n.network) || '/' || masklen(n.network) AS network, n.label, n.site_id::text AS "siteId",
+      SELECT n.id::text AS id, host(n.network) || '/' || masklen(n.network) AS network, n.label,
              n.created_at AS "createdAt", n.created_by::text AS "createdBy"
       FROM tenant.trusted_networks n WHERE n.deleted_at IS NULL ORDER BY n.created_at, n.id`;
     const creatorIds = [...new Set(rows.map((r) => r.createdBy).filter((id): id is string => id !== null))];
@@ -65,7 +64,6 @@ export class SecurityPolicyReader {
       id: row.id,
       cidr: toCidr(row.network),
       label: row.label,
-      siteId: row.siteId,
       createdAt: row.createdAt.toISOString(),
       createdBy: row.createdBy ? { id: row.createdBy, fullName: names.get(row.createdBy) ?? '' } : null,
     }));

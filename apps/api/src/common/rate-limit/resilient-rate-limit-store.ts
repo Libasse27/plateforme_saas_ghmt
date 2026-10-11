@@ -2,6 +2,12 @@ import type { AttemptGate, FailureRecord, RateLimitStore, WindowHit } from './ra
 
 /** Pause avant de réessayer le stockage principal : évite d'attendre le délai d'expiration à chaque requête. */
 const RETRY_PRIMARY_AFTER_MS = 5_000;
+/** Repli prudent (docs/11 décision 24) : attente annoncée à un identifiant refusé pendant la panne. */
+export const PRUDENT_RETRY_AFTER_MS = 60_000;
+/** Repli prudent : admissions examinées par minute et par instance pendant la panne, tous identifiants confondus. */
+export const PRUDENT_ADMISSIONS_PER_MINUTE = 60;
+const PRUDENT_WINDOW_MS = 60_000;
+const PRUDENT_ADMISSIONS_KEY = 'prudent-fallback:admissions';
 export interface ResilientOptions {
   readonly now?: () => number;
   /** Appelé une fois à l'entrée en mode dégradé (nom de l'erreur seulement : aucune donnée sensible). */
@@ -12,12 +18,16 @@ export interface ResilientOptions {
 
 /**
  * Stockage principal (Redis) avec repli mémoire par instance : la limitation n'est jamais absente (docs/04 §9.3),
- * même si elle n'est plus partagée entre instances pendant la panne.
+ * même si elle n'est plus partagée entre instances pendant la panne. Les admissions (`gate`) passent alors en repli
+ * prudent (décision 24) : un identifiant déjà en échec pendant la panne est refusé et l'instance plafonne ses admissions,
+ * pour qu'un attaquant ne multiplie pas ses essais en répartissant ses requêtes entre instances.
  */
 export class ResilientRateLimitStore implements RateLimitStore {
   private pausedUntil = 0;
   /** Date d'entrée en mode dégradé ; `null` tant que le stockage principal répond. */
   private degradedSince: number | null = null;
+  /** Identifiants admis pendant la panne en cours : seul un échec de cette période vaut refus prudent. */
+  private degradedKeys = new Set<string>();
   private readonly now: () => number;
 
   constructor(
@@ -40,12 +50,11 @@ export class ResilientRateLimitStore implements RateLimitStore {
     return this.run((store) => store.hit(key, ttlMs, limit, blockMs));
   }
 
-  recordFailure(key: string, ttlMs: number, nowMs: number): Promise<FailureRecord> {
-    return this.run((store) => store.recordFailure(key, ttlMs, nowMs));
-  }
-
   gate(key: string, ttlMs: number, nowMs: number, scheduleSeconds: readonly number[], capSeconds: number | null): Promise<AttemptGate> {
-    return this.run((store) => store.gate(key, ttlMs, nowMs, scheduleSeconds, capSeconds));
+    return this.run(
+      (store) => store.gate(key, ttlMs, nowMs, scheduleSeconds, capSeconds),
+      () => this.prudentGate(key, ttlMs, nowMs, scheduleSeconds, capSeconds),
+    );
   }
 
   async release(key: string): Promise<void> {
@@ -62,18 +71,28 @@ export class ResilientRateLimitStore implements RateLimitStore {
     await this.run((store) => store.reset(key));
   }
 
-  private async run<T>(operation: (store: RateLimitStore) => Promise<T>): Promise<T> {
+  private async run<T>(operation: (store: RateLimitStore) => Promise<T>, onFallback: () => Promise<T> = () => operation(this.fallback)): Promise<T> {
     // Pendant la pause qui suit un échec, le stockage principal n'est pas sollicité.
-    if (this.now() < this.pausedUntil) return operation(this.fallback);
+    if (this.now() < this.pausedUntil) return onFallback();
     let result: T;
     try {
       result = await operation(this.primary);
     } catch (error: unknown) {
       this.degrade(error);
-      return operation(this.fallback);
+      return onFallback();
     }
     this.recover();
     return result;
+  }
+
+  private async prudentGate(key: string, ttlMs: number, nowMs: number, scheduleSeconds: readonly number[], capSeconds: number | null): Promise<AttemptGate> {
+    const current = this.degradedKeys.has(key) ? await this.fallback.get(key) : null;
+    if (current && current.count > 0) return { allowed: false, retryAfterMs: PRUDENT_RETRY_AFTER_MS, count: current.count };
+    const budget = await this.fallback.hit(PRUDENT_ADMISSIONS_KEY, PRUDENT_WINDOW_MS, PRUDENT_ADMISSIONS_PER_MINUTE, 0);
+    if (budget.isBlocked) return { allowed: false, retryAfterMs: Math.max(1, budget.timeToBlockExpireMs), count: current?.count ?? 0 };
+    const gate = await this.fallback.gate(key, ttlMs, nowMs, scheduleSeconds, capSeconds);
+    if (gate.allowed) this.degradedKeys.add(key);
+    return gate;
   }
 
   private degrade(error: unknown): void {
@@ -89,6 +108,7 @@ export class ResilientRateLimitStore implements RateLimitStore {
     if (this.degradedSince === null) return;
     const degradedForMs = this.now() - this.degradedSince;
     this.degradedSince = null;
+    this.degradedKeys = new Set();
     this.options.onRecovered?.(degradedForMs);
   }
 }

@@ -77,7 +77,7 @@ describe('addTrustedNetworkAction', () => {
     const { calls } = stubApi(() => okEnvelope({ id: NETWORK }, {}, 201));
     const state = await addTrustedNetworkAction({}, form({ cidr: '203.0.113.9/24', label: 'Siège', siteId: SITE, totpCode: '123456' }));
     expect(state).toMatchObject({ ok: true, message: 'Plage réseau ajoutée.' });
-    expect(calls.find((c) => c.path === '/iam/security/trusted-networks')?.body).toEqual({ cidr: '203.0.113.0/24', label: 'Siège', siteId: SITE, totpCode: '123456' });
+    expect(calls.find((c) => c.path === '/iam/security/trusted-networks')?.body).toEqual({ cidr: '203.0.113.0/24', label: 'Siège', totpCode: '123456' });
     expect(revalidatePath).toHaveBeenCalledWith(PAGE);
   });
 

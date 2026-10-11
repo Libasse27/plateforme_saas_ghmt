@@ -60,7 +60,7 @@ function EmailCodeStep({
           <TextField
             name="emailCode"
             label="Code reçu par e-mail"
-            hint="Code à 6 chiffres, valable 10 minutes."
+            hint="Code à 6 chiffres, valable 10 minutes. Pas d'accès à votre e-mail ? Contactez votre administrateur."
             required
             inputMode="numeric"
             autoComplete="one-time-code"

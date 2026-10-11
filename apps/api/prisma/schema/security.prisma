@@ -41,13 +41,13 @@ model MfaEmailCode {
   @@schema("tenant")
 }
 
-/// Plage réseau publique déclarée par l'établissement (docs/11 D4). CHECK de préfixe et de forme réseau en SQL.
+/// Plage réseau publique déclarée par l'établissement (docs/11 D4), valable pour tout l'établissement (décision 26).
+/// CHECK de préfixe (≥ /24, ≥ /48) et de forme réseau en SQL.
 model TrustedNetwork {
   id        String    @default(uuid(7)) @db.Uuid
   tenantId  String    @map("tenant_id") @db.Uuid
   network   String    @db.Inet
   label     String    @db.VarChar(80)
-  siteId    String?   @map("site_id") @db.Uuid
   createdBy String?   @map("created_by") @db.Uuid
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)

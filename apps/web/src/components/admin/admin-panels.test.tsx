@@ -49,19 +49,40 @@ describe('UserActions', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Renvoyer l\'invitation' }));
     await waitFor(() => expect(mocks.resend).toHaveBeenCalled());
   });
-  it('compte verrouillé : déverrouiller ; désactivé : réactiver', async () => {
+  it('compte verrouillé : déverrouiller (motif exigé) ; désactivé : réactiver', async () => {
     const { rerender } = render(<UserActions userId={USER} status="locked" rights={ALL} />);
-    expect(screen.getByRole('button', { name: 'Déverrouiller le compte' })).toBeInTheDocument();
+    expect(screen.getByText('Déverrouiller le compte')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirmer le déverrouillage' })).toBeInTheDocument();
     rerender(<UserActions userId={USER} status="disabled" rights={ALL} />);
     expect(screen.getByRole('button', { name: 'Réactiver le compte' })).toBeInTheDocument();
   });
-  it('compte actif : réinitialisation du second facteur en deux temps, avec avertissement', async () => {
+  it('compte actif : réinitialisation du second facteur en deux temps, avec motif et rappel d\'identité (docs/11 §14.4.4)', async () => {
+    const user = userEvent.setup();
     render(<UserActions userId={USER} status="active" rights={{ ...ALL, resetMfa: true }} />);
     expect(screen.getByText('Réinitialiser le second facteur')).toBeInTheDocument();
     expect(screen.getByText(/ses sessions seront coupées et il devra enrôler à nouveau/)).toBeInTheDocument();
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Confirmer la réinitialisation' }));
+    const reason = screen.getByLabelText(/Motif/);
+    expect(reason).toHaveAccessibleDescription(expect.stringContaining('en face à face ou par rappel sur un numéro connu'));
+    await user.type(reason, 'Téléphone perdu, identité vérifiée sur place');
+    await user.click(screen.getByRole('button', { name: 'Confirmer la réinitialisation' }));
     await waitFor(() => expect(mocks.resetMfa).toHaveBeenCalled());
-    expect((mocks.resetMfa.mock.calls[0]?.[1] as FormData).get('userId')).toBe(USER);
+    const data = mocks.resetMfa.mock.calls[0]?.[1] as FormData;
+    expect(data.get('userId')).toBe(USER);
+    expect(data.get('reason')).toBe('Téléphone perdu, identité vérifiée sur place');
+  });
+  it('déverrouillage : motif transmis à l\'action ; proposé aussi pour un compte actif à la connexion ralentie', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<UserActions userId={USER} status="active" rights={ALL} />);
+    expect(screen.queryByText('Déverrouiller le compte')).not.toBeInTheDocument();
+    rerender(<UserActions userId={USER} status="active" rights={ALL} flags={{ loginDelayed: true }} />);
+    await user.type(screen.getByLabelText(/Motif/), 'Appel de l\'intéressée au numéro connu');
+    await user.click(screen.getByRole('button', { name: 'Confirmer le déverrouillage' }));
+    await waitFor(() => expect(mocks.unlock).toHaveBeenCalled());
+    expect((mocks.unlock.mock.calls[0]?.[1] as FormData).get('reason')).toBe('Appel de l\'intéressée au numéro connu');
+  });
+  it('« Réinitialiser le second facteur » masqué quand l\'utilisateur n\'a pas de second facteur', () => {
+    render(<UserActions userId={USER} status="active" rights={{ ...ALL, resetMfa: true }} flags={{ mfaEnrolled: false }} />);
+    expect(screen.queryByText('Réinitialiser le second facteur')).not.toBeInTheDocument();
   });
   it('réinitialisation du second facteur absente sans le droit (ou sur soi-même)', () => {
     render(<UserActions userId={USER} status="active" rights={ALL} />);
@@ -129,6 +150,15 @@ describe('UsersTable', () => {
     const badges = screen.getAllByText('Administrateur principal');
     expect(badges).toHaveLength(1);
     expect(badges[0]?.closest('tr')).toHaveTextContent('Ibou Fall');
+  });
+  it('colonne « Second facteur » et badge « Connexion ralentie » (docs/11 §14.4.4)', () => {
+    render(<UsersTable users={[user({ mfaEnrolled: true }), user({ id: 'u2', fullName: 'Ibou Fall', mfaEnrolled: false, loginDelayed: true }), user({ id: 'u3', fullName: 'Anta Sy' })]} timeZone="Africa/Dakar" />);
+    expect(screen.getByRole('columnheader', { name: 'Second facteur' })).toBeInTheDocument();
+    expect(screen.getByText('Awa Diop').closest('tr')).toHaveTextContent('Activé');
+    const delayed = screen.getByText('Ibou Fall').closest('tr') as HTMLElement;
+    expect(delayed).toHaveTextContent('Non activé');
+    expect(delayed).toHaveTextContent('Connexion ralentie');
+    expect(screen.getByText('Anta Sy').closest('tr')).toHaveTextContent('Inconnu');
   });
   it('état vide', () => {
     render(<UsersTable users={[]} timeZone="Africa/Dakar" />);

@@ -5,11 +5,11 @@ describe('toTrustedNetwork', () => {
   it('lit une plage complète', () => {
     expect(
       toTrustedNetwork({ id: 'n1', cidr: '203.0.113.0/24', label: 'Siège', siteId: 's1', createdAt: '2026-10-05T08:00:00.000Z', createdBy: { id: 'u1', fullName: 'Awa Diop' } }),
-    ).toEqual({ id: 'n1', cidr: '203.0.113.0/24', label: 'Siège', siteId: 's1', createdAt: '2026-10-05T08:00:00.000Z', createdBy: { id: 'u1', fullName: 'Awa Diop' } });
+    ).toEqual({ id: 'n1', cidr: '203.0.113.0/24', label: 'Siège', createdAt: '2026-10-05T08:00:00.000Z', createdBy: { id: 'u1', fullName: 'Awa Diop' } });
   });
 
   it('tolère les champs absents ou mal typés', () => {
-    expect(toTrustedNetwork({})).toEqual({ id: '', cidr: '', label: '', siteId: null, createdAt: '', createdBy: null });
+    expect(toTrustedNetwork({})).toEqual({ id: '', cidr: '', label: '', createdAt: '', createdBy: null });
     expect(toTrustedNetwork(null).createdBy).toBeNull();
     expect(toTrustedNetwork({ createdBy: { id: 4 } }).createdBy).toBeNull();
     expect(toTrustedNetwork({ createdBy: { id: 'u1' } }).createdBy).toEqual({ id: 'u1', fullName: 'Utilisateur' });

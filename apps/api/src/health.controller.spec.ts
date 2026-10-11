@@ -9,7 +9,7 @@ const clientReplying = (reply: () => Promise<string>): Redis => ({ ping: reply }
 const memoryStore = (): RateLimitStore => new MemoryRateLimitStore();
 const brokenStore = (): RateLimitStore => {
   const fail = () => Promise.reject(new Error('redis indisponible'));
-  return { hit: fail, recordFailure: fail, gate: fail, release: fail, get: fail, reset: fail };
+  return { hit: fail, gate: fail, release: fail, get: fail, reset: fail };
 };
 
 describe('HealthController.check (sonde publique)', () => {

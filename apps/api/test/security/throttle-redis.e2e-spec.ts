@@ -104,7 +104,7 @@ describe.skipIf(!REDIS_UP)('délai progressif atomique sur Redis (script Lua, do
   });
 
   it('plafonne le délai et rend la date du dernier échec avec la réservation', async () => {
-    for (let i = 0; i < 8; i += 1) await store.recordFailure('gate-b', TTL, T0);
+    for (let i = 0; i < 8; i += 1) await store.gate('gate-b', TTL, T0, [0], null);
 
     expect((await store.gate('gate-b', TTL, T0, SCHEDULE, 60)).retryAfterMs).toBe(60_000);
     expect((await store.gate('gate-b', TTL, T0 + 61_000, SCHEDULE, 60)).allowed).toBe(true);

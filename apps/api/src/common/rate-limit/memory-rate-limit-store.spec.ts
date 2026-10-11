@@ -53,22 +53,22 @@ describe('MemoryRateLimitStore.hit', () => {
   });
 });
 
-describe('MemoryRateLimitStore.recordFailure', () => {
+describe('MemoryRateLimitStore : compteur d’échecs', () => {
   it('compte les échecs, date le dernier et expire après la durée de vie', async () => {
     const { store, advance } = storeWithClock(5_000);
     expect(await store.get('f')).toBeNull();
-    expect(await store.recordFailure('f', 10_000, 5_000)).toEqual({ count: 1, lastAtMs: 5_000 });
+    expect(await store.gate('f', 10_000, 5_000, [0], null)).toMatchObject({ allowed: true, count: 1 });
     advance(2_000);
-    expect(await store.recordFailure('f', 10_000, 7_000)).toEqual({ count: 2, lastAtMs: 7_000 });
+    expect(await store.gate('f', 10_000, 7_000, [0], null)).toMatchObject({ allowed: true, count: 2 });
     expect(await store.get('f')).toEqual({ count: 2, lastAtMs: 7_000 });
     advance(10_001);
     expect(await store.get('f')).toBeNull();
-    expect(await store.recordFailure('f', 10_000, 17_001)).toEqual({ count: 1, lastAtMs: 17_001 });
+    expect(await store.gate('f', 10_000, 17_001, [0], null)).toMatchObject({ allowed: true, count: 1 });
   });
 
   it('reset remet le compteur à zéro', async () => {
     const { store } = storeWithClock();
-    await store.recordFailure('f', 10_000, 1);
+    await store.gate('f', 10_000, 1, [0], null);
     await store.reset('f');
     expect(await store.get('f')).toBeNull();
   });

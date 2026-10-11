@@ -8,7 +8,8 @@ ARG NODE_IMAGE=node:22.23.3-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b4
 FROM ${NODE_IMAGE} AS build
 WORKDIR /repo
 RUN corepack enable
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+# Droits fixés : l'étape `migrate` lit ces fichiers en `node`, quels que soient les droits sur l'hôte.
+COPY --chmod=644 package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/
 COPY apps/api/package.json apps/api/
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile --filter @ghmt/api...

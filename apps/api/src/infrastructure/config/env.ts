@@ -46,6 +46,9 @@ const dunningOffsets = z
     return values;
   });
 
+/** Nom de bucket S3 : 3 à 63 caractères, minuscules, chiffres, points et tirets. */
+const bucketName = z.string().regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, 'nom de bucket S3 invalide (minuscules, chiffres, . et -)');
+
 const booleanFlag = (defaultValue: 'true' | 'false') => z.enum(['true', 'false']).default(defaultValue).transform((v) => v === 'true');
 
 function safeJson(raw: string): unknown {
@@ -118,6 +121,24 @@ export const envSchema = z.object({
   /** Jobs de sécurité (purge des jetons, expiration des inscriptions) : `false` en test (pilotés par runOnce). */
   SECURITY_JOBS_ENABLED: booleanFlag('true'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+  /** Documents (docs/13 D2 à D5) : `true` exige le stockage S3 ; en production, aussi l'antivirus. */
+  FILES_ENABLED: booleanFlag('false'),
+  S3_ENDPOINT: optionalUrl,
+  S3_REGION: z.string().min(1).default('us-east-1'),
+  S3_FORCE_PATH_STYLE: booleanFlag('true'),
+  S3_ACCESS_KEY_ID: optionalString,
+  S3_SECRET_ACCESS_KEY: optionalString,
+  S3_BUCKET_QUARANTINE: bucketName.default('ghmt-dev-quarantine'),
+  S3_BUCKET_DOCUMENTS: bucketName.default('ghmt-dev-documents'),
+  /** Absent hors production : analyse ignorée avec avertissement ; obligatoire en production avec les documents. */
+  CLAMAV_HOST: optionalString,
+  CLAMAV_PORT: z.coerce.number().int().min(1).max(65535).default(3310),
+  /** Traces OpenTelemetry (docs/13 D11) : `true` exige l'endpoint OTLP du Collector. */
+  OTEL_ENABLED: booleanFlag('false'),
+  OTEL_EXPORTER_OTLP_ENDPOINT: optionalUrl,
+  OTEL_SERVICE_NAME: z.string().min(1).default('ghmt-api'),
+  /** Métriques Prometheus sur un port interne, jamais routé par le proxy. */
+  METRICS_PORT: z.coerce.number().int().min(1).max(65535).default(9464),
 });
 
 type ParsedEnv = z.infer<typeof envSchema>;
@@ -146,6 +167,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   const production = source['NODE_ENV'] === 'production';
   assertSmsConfiguration(result.data, production);
   assertRateLimitConfiguration(result.data, production);
+  assertFilesConfiguration(result.data, production);
+  assertObservabilityConfiguration(result.data);
   // Les liens envoyés par e-mail (réinitialisation, invitation, confirmation) portent un jeton : jamais en clair.
   if (production && !result.data.WEB_URL.startsWith('https://')) {
     throw new Error('Configuration invalide : WEB_URL doit utiliser https en production.');
@@ -198,4 +221,34 @@ function assertRateLimitConfiguration(env: Pick<ParsedEnv, 'RATE_LIMIT_STORE' | 
   if (env.RATE_LIMIT_STORE === 'redis' && !env.REDIS_URL) {
     throw new Error('Configuration invalide : REDIS_URL est requis avec RATE_LIMIT_STORE=redis.');
   }
+}
+
+type FilesSettings = Pick<
+  ParsedEnv,
+  'FILES_ENABLED' | 'S3_ENDPOINT' | 'S3_ACCESS_KEY_ID' | 'S3_SECRET_ACCESS_KEY' | 'S3_BUCKET_QUARANTINE' | 'S3_BUCKET_DOCUMENTS' | 'CLAMAV_HOST'
+>;
+
+/** Documents (docs/13 D2, D5) : stockage complet, https et antivirus obligatoires en production. */
+function assertFilesConfiguration(env: FilesSettings, production: boolean): void {
+  if (env.S3_BUCKET_QUARANTINE === env.S3_BUCKET_DOCUMENTS) {
+    throw new Error('Configuration invalide : S3_BUCKET_QUARANTINE et S3_BUCKET_DOCUMENTS doivent être distincts.');
+  }
+  if (!env.FILES_ENABLED) return;
+  for (const name of ['S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'] as const) {
+    if (!env[name]) throw new Error(`Configuration invalide : ${name} est requis avec FILES_ENABLED=true.`);
+  }
+  if (!production) return;
+  if (!env.S3_ENDPOINT?.startsWith('https://')) {
+    throw new Error('Configuration invalide : S3_ENDPOINT doit utiliser https en production.');
+  }
+  // Un fichier non analysé n'est jamais servi : sans antivirus, aucun document ne deviendrait disponible.
+  if (!env.CLAMAV_HOST) throw new Error('Configuration invalide : CLAMAV_HOST est requis en production avec FILES_ENABLED=true.');
+}
+
+/** Observabilité (docs/13 D11) : endpoint OTLP requis, port de métriques distinct du port public. */
+function assertObservabilityConfiguration(env: Pick<ParsedEnv, 'OTEL_ENABLED' | 'OTEL_EXPORTER_OTLP_ENDPOINT' | 'PORT' | 'METRICS_PORT'>): void {
+  if (env.OTEL_ENABLED && !env.OTEL_EXPORTER_OTLP_ENDPOINT) {
+    throw new Error('Configuration invalide : OTEL_EXPORTER_OTLP_ENDPOINT est requis avec OTEL_ENABLED=true.');
+  }
+  if (env.METRICS_PORT === env.PORT) throw new Error('Configuration invalide : METRICS_PORT doit être distinct de PORT.');
 }

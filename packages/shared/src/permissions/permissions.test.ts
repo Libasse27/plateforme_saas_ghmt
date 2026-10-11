@@ -102,3 +102,30 @@ describe('grille tarifaire (phase facturation)', () => {
     );
   });
 });
+
+describe('documents administratifs du patient (docs/13 §4)', () => {
+  const holders = (permission: string): string[] =>
+    ROLE_TEMPLATES.filter((template) => (permissionsForTemplate(template) as string[]).includes(permission))
+      .map((template) => template.code)
+      .sort();
+
+  it('déclare la suppression et la marque sensible, comme la lecture', () => {
+    const sensitive = (code: string): boolean | undefined => ALL_PERMISSIONS.find((p) => p.code === code)?.isSensitive;
+
+    expect(sensitive('patients:identity_doc:delete')).toBe(true);
+    expect(sensitive('patients:identity_doc:read')).toBe(true);
+    expect(sensitive('patients:identity_doc:create')).toBe(false);
+  });
+
+  it("réserve la lecture à l'accueil, aux agents administratifs, aux soignants et au caissier", () => {
+    expect(holders('patients:identity_doc:read')).toEqual(['admin_agent', 'cashier', 'doctor', 'midwife', 'nurse', 'receptionist']);
+  });
+
+  it("réserve le dépôt à l'accueil et aux agents administratifs", () => {
+    expect(holders('patients:identity_doc:create')).toEqual(['admin_agent', 'receptionist']);
+  });
+
+  it('réserve la suppression aux agents administratifs, pas à l\'administrateur sans lecture (arbitrage du 2026-10-11)', () => {
+    expect(holders('patients:identity_doc:delete')).toEqual(['admin_agent']);
+  });
+});

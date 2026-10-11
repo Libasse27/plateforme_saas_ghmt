@@ -197,3 +197,4 @@ export * from './notifications';
 export * from './admin';
 export * from './security';
 export * from './onboarding';
+export * from './files';

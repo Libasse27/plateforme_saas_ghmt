@@ -25,7 +25,7 @@ export const PERMISSION_CATALOG = {
   },
   patients: {
     patient: ['read', 'create', 'update', 'delete', 'export', 'print'],
-    identity_doc: ['read', 'create'],
+    identity_doc: ['read', 'create', 'delete'],
     consent: ['read', 'create', 'update'],
     merge: ['validate'],
   },

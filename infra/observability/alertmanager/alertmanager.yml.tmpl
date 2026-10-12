@@ -1,0 +1,34 @@
+# Alertmanager (docs/13 D12) : toutes les alertes vers l'e-mail de l'astreinte (ALERT_EMAIL).
+# MODÈLE : les __VARIABLES__ sont remplacées au démarrage du conteneur (compose.prod.yml) ; le mot de passe SMTP est lu
+# dans le secret Docker, jamais écrit dans ce fichier.
+global:
+  smtp_smarthost: "__SMTP_HOST__"
+  smtp_from: "__MAIL_FROM__"
+  smtp_auth_username: "__SMTP_USER__"
+  smtp_auth_password_file: /run/secrets/alertmanager_smtp_password
+  smtp_require_tls: true
+  resolve_timeout: 5m
+
+route:
+  receiver: astreinte
+  group_by: [alertname]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: ['severity="critical"']
+      receiver: astreinte
+      repeat_interval: 1h
+
+receivers:
+  - name: astreinte
+    email_configs:
+      - to: "__ALERT_EMAIL__"
+        send_resolved: true
+        headers:
+          Subject: '[GHMT] {{ .Status | toUpper }} {{ .CommonLabels.alertname }}'
+
+inhibit_rules:
+  # API injoignable : les alertes de latence et de 5xx sont redondantes.
+  - source_matchers: ['alertname="GhmtApiDown"']
+    target_matchers: ['alertname=~"GhmtApi(GetLatencyHigh|PostLatencyHigh|High5xxRate|ErrorBudgetBurn)"']

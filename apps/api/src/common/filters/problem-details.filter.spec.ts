@@ -37,6 +37,11 @@ describe('summarizeError (A12)', () => {
     expect(summarizeError(error)).toEqual({ name: 'PrismaClientValidationError', code: null });
   });
 
+  it('ne journalise jamais le message d’une erreur PostgreSQL brute (code SQLSTATE) : il peut citer la valeur saisie', () => {
+    const error = Object.assign(new Error('invalid input syntax for type uuid: "Awa Diop"'), { name: 'error', code: '22P02', severity: 'ERROR' });
+    expect(summarizeError(error)).toEqual({ name: 'error', code: '22P02' });
+  });
+
   it('conserve le message tronqué d’une erreur non Prisma dont le code ne commence pas par P', () => {
     expect(summarizeError(Object.assign(new Error('boom'), { code: 'ECONNRESET' }))).toMatchObject({ message: 'boom' });
   });

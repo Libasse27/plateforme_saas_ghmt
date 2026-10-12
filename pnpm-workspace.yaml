@@ -8,4 +8,5 @@ allowBuilds:
   argon2: true
   esbuild: true
   prisma: true
+  protobufjs: false
   unrs-resolver: true

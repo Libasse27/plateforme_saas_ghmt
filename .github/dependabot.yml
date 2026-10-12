@@ -1,0 +1,61 @@
+# Mises à jour automatisées des dépendances (docs/13 §13 Q6) : Dependabot, une PR groupée par écosystème, chaque semaine.
+# Chaque PR passe par ci.yml, security.yml et images.yml comme toute modification.
+# Délai de 7 jours avant de proposer une version (`cooldown`) : une version piégée puis retirée du registre n'est pas reprise.
+# Les correctifs de sécurité (alertes Dependabot) ne sont pas groupés ni retardés.
+# Limite connue : les images de base des Dockerfiles sont dans un ARG (NODE_IMAGE), que Dependabot ne met pas à jour ;
+# elles se mettent à jour à la main (commentaire en tête de apps/api/Dockerfile et apps/web/Dockerfile).
+version: 2
+updates:
+  # Monorepo pnpm : un seul lockfile à la racine, tous les paquets du workspace.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '05:00'
+      timezone: Etc/UTC
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      npm:
+        applies-to: version-updates
+        patterns: ['*']
+    commit-message:
+      prefix: chore
+      include: scope
+
+  # Actions GitHub épinglées par SHA de commit : Dependabot met à jour le SHA et le commentaire de version.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '05:00'
+      timezone: Etc/UTC
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        applies-to: version-updates
+        patterns: ['*']
+    commit-message:
+      prefix: ci
+
+  # Images des fichiers compose (épinglées par digest, contrôlées par infra/deploy/check-pinned-images.sh).
+  - package-ecosystem: docker-compose
+    directories: [/infra, /infra/deploy]
+    schedule:
+      interval: weekly
+      day: monday
+      time: '05:00'
+      timezone: Etc/UTC
+    cooldown:
+      default-days: 7
+    groups:
+      docker-compose:
+        applies-to: version-updates
+        patterns: ['*']
+    commit-message:
+      prefix: chore
+      include: scope

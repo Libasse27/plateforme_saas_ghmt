@@ -1,0 +1,121 @@
+# Sécurité de la chaîne d'approvisionnement (docs/13 §11.1 point 3) : secrets (gitleaks), dépendances (pnpm audit),
+# vulnérabilités et mauvaises configurations du dépôt (Trivy FS), analyse statique (CodeQL).
+# Chaque semaine en plus des PR : une vulnérabilité publiée après la fusion doit aussi être vue.
+# Outils lancés depuis leurs images épinglées par digest (pas d'action tierce) ; actions GitHub épinglées par SHA de commit.
+name: Sécurité
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 4 * * 1' # lundi 04:17 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: securite-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gitleaks:
+    name: Secrets (gitleaks)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Récupérer tout l'historique
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Tout l'historique, règles par défaut + exclusions documentées de .gitleaks.toml ; valeurs masquées (--redact).
+      - name: gitleaks (ghcr.io/gitleaks/gitleaks:v8.30.1)
+        run: >-
+          docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$GITHUB_WORKSPACE:/repo:ro" -w /repo
+          ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          git /repo --config /repo/.gitleaks.toml --redact --no-banner --exit-code 1
+
+  dependances:
+    name: Dépendances (pnpm audit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Installer pnpm (version de packageManager)
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Installer Node.js (.nvmrc)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      # En premier : `pnpm audit --ignore` (étape suivante) inscrit ses exceptions dans pnpm-workspace.yaml.
+      - name: pnpm audit des dépendances d'exécution (aucune exception)
+        run: pnpm audit --prod --audit-level=high
+
+      # Exceptions (même liste que scripts/ci/trivy-ignore.yaml, à retirer dès les `overrides` de pnpm-workspace.yaml posés) :
+      # outillage de développement seulement, `pnpm audit --prod` ne signale rien.
+      #   GHSA-r5fr-rjxr-66jc lodash (Prisma Studio), GHSA-ggr8-5vv4-36mx deepmerge-ts (@prisma/config),
+      #   GHSA-3f6p-5ww8-9rcr mysql2 (CLI prisma, pilote MySQL inutilisé), GHSA-vfj7-8cjw-p6xm braces (eslint-config-next,
+      #   aucune version corrigée).
+      - name: pnpm audit (high et critical)
+        run: >-
+          pnpm audit --audit-level=high
+          --ignore GHSA-r5fr-rjxr-66jc
+          --ignore GHSA-ggr8-5vv4-36mx
+          --ignore GHSA-3f6p-5ww8-9rcr
+          --ignore GHSA-vfj7-8cjw-p6xm
+
+  trivy:
+    name: Vulnérabilités et configuration (Trivy FS)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Lockfile (vulnérabilités corrigeables HIGH et CRITICAL) et Dockerfiles (mauvaises configurations).
+      - name: Trivy FS (aquasec/trivy:0.75.0)
+        run: >-
+          docker run --rm -v "$GITHUB_WORKSPACE:/src:ro" -w /src
+          aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+          fs --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed
+          --ignorefile scripts/ci/trivy-ignore.yaml --skip-dirs '**/node_modules'
+          --timeout 15m --exit-code 1 --no-progress .
+
+  codeql:
+    name: CodeQL (${{ matrix.langage }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        langage: [javascript-typescript, actions]
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialiser CodeQL
+        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          languages: ${{ matrix.langage }}
+          build-mode: none
+          queries: security-extended
+
+      - name: Analyser
+        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          category: /language:${{ matrix.langage }}

@@ -252,7 +252,7 @@ export class PlanChangeService {
   }
 
   /** Utilisateurs et sites actuels doivent tenir dans le plan cible, sinon 409 avec la liste des dépassements. */
-  private async assertDowngradeCompatible(tx: PlatformTx, tenantId: string, target: Plan, now: Date): Promise<void> {
+  private async assertDowngradeCompatible(tx: PlatformTx, tenantId: string, target: Plan, _now: Date): Promise<void> {
     const limits = entitlementsSchema.parse(target.entitlements).limits;
     const [usage] = await this.repository.usageOf(tx, [tenantId]);
     const violations: DowngradeViolation[] = [];

@@ -113,7 +113,8 @@ Le numéro de phase est aussi celui de son futur contrat (`docs/13-phase-….md`
 ### P11 — Durcissement sécurité ✅
 Contrat `11-phase-durcissement-securite.md`, branche `feat/durcissement-securite` (commits `99ac846`, `bb42343`, `57be7e7`). Décisions 1 à 26 livrées, test de fumée §12 joué en entier. **Reste** : fusionner la branche dans `main` après accord.
 
-### P13 — Socle de production ⬜
+### P13 — Socle de production 🟡
+Lancée le 2026-10-11 : contrat `13-phase-socle-production.md`, questions arbitrées le 2026-10-11, branche `feat/socle-production`.
 - **Objectif** : rendre la plateforme exploitable : rien ne part en production sans pipeline, sauvegarde ni stockage de documents.
 - **Contenu** :
   - CI (lint, typecheck, tests unitaires et e2e sur Postgres, build des images, `check-pinned-images.sh`, scan de secrets et de dépendances, OpenAPI générée) ;

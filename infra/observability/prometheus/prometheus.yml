@@ -1,0 +1,60 @@
+# Prometheus du profil `observability` (docs/13 §6.2, D11, D12). Réseau interne `observability` uniquement : aucune
+# cible n'est jointe via Traefik et aucun port n'est publié. Rétention : options de ligne de commande (compose.prod.yml).
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/rules/*.rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # Métriques de l'API sur METRICS_PORT (9464), serveur distinct de l'API, jamais routé par Traefik.
+  - job_name: ghmt-api
+    static_configs:
+      - targets: ["api:9464"]
+
+  # Fichiers .prom de backup.sh et restore-test.sh (collecteur textfile de node_exporter).
+  - job_name: backup-metrics
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  # Antivirus : /api/v1/health/ready ne doit pas contenir `"antivirus":"down"` (module ready_antivirus).
+  - job_name: blackbox-antivirus
+    metrics_path: /probe
+    params:
+      module: [ready_antivirus]
+    static_configs:
+      - targets: ["http://api:3000/api/v1/health/ready"]
+    relabel_configs: &blackbox_relabel
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # Certificat public servi par Traefik (expiration < 14 jours). Cible réécrite au démarrage (DOMAIN).
+  - job_name: blackbox-tls
+    metrics_path: /probe
+    params:
+      module: [tls_certificate]
+    file_sd_configs:
+      - files: ["/tmp/targets/tls.json"]
+    relabel_configs: *blackbox_relabel
+
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8888"]
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

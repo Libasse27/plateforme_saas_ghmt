@@ -3,6 +3,8 @@ import type { Redis } from 'ioredis';
 import { MemoryRateLimitStore } from './common/rate-limit/memory-rate-limit-store';
 import type { RateLimitStore } from './common/rate-limit/rate-limit-store';
 import { ResilientRateLimitStore } from './common/rate-limit/resilient-rate-limit-store';
+import type { Antivirus } from './infrastructure/storage/clamav-scanner';
+import type { ObjectStorage } from './infrastructure/storage/object-storage';
 import { HealthController } from './health.controller';
 
 const clientReplying = (reply: () => Promise<string>): Redis => ({ ping: reply }) as unknown as Redis;
@@ -11,6 +13,9 @@ const brokenStore = (): RateLimitStore => {
   const fail = () => Promise.reject(new Error('redis indisponible'));
   return { hit: fail, gate: fail, release: fail, get: fail, reset: fail };
 };
+
+const storageReplying = (reachable: () => Promise<boolean>): ObjectStorage => ({ isReachable: reachable }) as unknown as ObjectStorage;
+const antivirusOf = (enabled: boolean, reachable: () => Promise<boolean>): Antivirus => ({ enabled, isReachable: reachable, scan: () => Promise.reject(new Error('inutilisé')) });
 
 describe('HealthController.check (sonde publique)', () => {
   it('ne renvoie que { status } : aucun détail d’infrastructure exposé', async () => {
@@ -22,13 +27,16 @@ describe('HealthController.check (sonde publique)', () => {
 
 describe('HealthController.ready (sonde interne, non routée par le proxy)', () => {
   it('signale redis « disabled » et une limitation « memory » sans client (stockage mémoire configuré)', async () => {
-    expect(await new HealthController(null, memoryStore()).ready()).toEqual({ status: 'ok', checks: { redis: 'disabled', rateLimit: 'memory' } });
+    expect(await new HealthController(null, memoryStore()).ready()).toEqual({
+      status: 'ok',
+      checks: { redis: 'disabled', rateLimit: 'memory', storage: 'disabled', antivirus: 'disabled' },
+    });
   });
 
   it('signale redis « up » quand PING répond, et une limitation sur « redis »', async () => {
     const store = new ResilientRateLimitStore(memoryStore(), memoryStore());
     const controller = new HealthController(clientReplying(() => Promise.resolve('PONG')), store);
-    expect(await controller.ready()).toEqual({ status: 'ok', checks: { redis: 'up', rateLimit: 'redis' } });
+    expect(await controller.ready()).toEqual({ status: 'ok', checks: { redis: 'up', rateLimit: 'redis', storage: 'disabled', antivirus: 'disabled' } });
   });
 
   it('signale redis « down » sur erreur ou réponse inattendue, sans faire échouer la sonde', async () => {
@@ -43,6 +51,32 @@ describe('HealthController.ready (sonde interne, non routée par le proxy)', () 
 
     const report = await new HealthController(clientReplying(() => Promise.reject(new Error('coupé'))), store).ready();
 
-    expect(report).toEqual({ status: 'ok', checks: { redis: 'down', rateLimit: 'memory_fallback' } });
+    expect(report).toEqual({ status: 'ok', checks: { redis: 'down', rateLimit: 'memory_fallback', storage: 'disabled', antivirus: 'disabled' } });
+  });
+});
+
+describe('HealthController.ready : documents (docs/13 §5.1)', () => {
+  const ready = (storage: ObjectStorage | null, antivirus: Antivirus | null) => new HealthController(null, memoryStore(), storage, antivirus).ready();
+
+  it('signale stockage et antivirus « up » quand ils répondent', async () => {
+    const report = await ready(storageReplying(() => Promise.resolve(true)), antivirusOf(true, () => Promise.resolve(true)));
+
+    expect(report.checks).toMatchObject({ storage: 'up', antivirus: 'up' });
+  });
+
+  it('signale « down » sur échec ou erreur de la sonde, sans faire échouer la sonde', async () => {
+    const report = await ready(storageReplying(() => Promise.reject(new Error('coupé'))), antivirusOf(true, () => Promise.resolve(false)));
+
+    expect(report).toMatchObject({ status: 'ok', checks: { storage: 'down', antivirus: 'down' } });
+    expect((await ready(storageReplying(() => Promise.resolve(false)), antivirusOf(true, () => Promise.reject(new Error('coupé'))))).checks).toMatchObject({
+      storage: 'down',
+      antivirus: 'down',
+    });
+  });
+
+  it('signale l’antivirus « disabled » quand l’analyse est ignorée (hors production sans CLAMAV_HOST)', async () => {
+    const report = await ready(storageReplying(() => Promise.resolve(true)), antivirusOf(false, () => Promise.resolve(false)));
+
+    expect(report.checks).toMatchObject({ storage: 'up', antivirus: 'disabled' });
   });
 });

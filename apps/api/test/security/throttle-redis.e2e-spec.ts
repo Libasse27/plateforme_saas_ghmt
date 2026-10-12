@@ -70,7 +70,7 @@ describe.skipIf(!REDIS_UP)('limitation de débit sur Redis, deux instances (docs
   it('GET /health/ready indique redis « up » et une limitation partagée sur « redis » sur les deux instances', async () => {
     for (const app of [first, second]) {
       const res = await http(app).get('/api/v1/health/ready').expect(200);
-      expect(res.body.data).toEqual({ status: 'ok', checks: { redis: 'up', rateLimit: 'redis' } });
+      expect(res.body.data).toEqual({ status: 'ok', checks: { redis: 'up', rateLimit: 'redis', storage: 'disabled', antivirus: 'disabled' } });
     }
   });
 });
@@ -135,7 +135,7 @@ describe('repli mémoire quand Redis est indisponible (docs/11 D2)', () => {
   it('signale redis « down » et le repli « memory_fallback » dans /health/ready sans faire échouer la sonde', async () => {
     const res = await http(app).get('/api/v1/health/ready').expect(200);
 
-    expect(res.body.data).toEqual({ status: 'ok', checks: { redis: 'down', rateLimit: 'memory_fallback' } });
+    expect(res.body.data).toEqual({ status: 'ok', checks: { redis: 'down', rateLimit: 'memory_fallback', storage: 'disabled', antivirus: 'disabled' } });
   });
 });
 
@@ -154,7 +154,7 @@ describe('stockage mémoire (configuration des tests)', () => {
   it('signale redis « disabled » et une limitation « memory » dans /health/ready', async () => {
     const res = await http(app).get('/api/v1/health/ready').expect(200);
 
-    expect(res.body.data.checks).toEqual({ redis: 'disabled', rateLimit: 'memory' });
+    expect(res.body.data.checks).toEqual({ redis: 'disabled', rateLimit: 'memory', storage: 'disabled', antivirus: 'disabled' });
   });
 
   it('GET /health public ne renvoie que { status } (docs/11 §14.2 M6)', async () => {

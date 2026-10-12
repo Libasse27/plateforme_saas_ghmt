@@ -1,0 +1,13 @@
+{
+  "name": "ghmt-backup-tools",
+  "private": true,
+  "description": "Outils Node de l'image de sauvegarde (prisma migrate status, vérification de la chaîne d'audit). Hors espace de travail pnpm : installé par npm ci dans infra/backup/Dockerfile.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "pg": "8.23.1",
+    "prisma": "7.10.0"
+  }
+}

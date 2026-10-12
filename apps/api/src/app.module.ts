@@ -24,6 +24,8 @@ import { SubscriptionsModule } from './modules/subscriptions/subscriptions.modul
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
+import { FilesModule } from './modules/files/files.module';
+import { ObservabilityModule } from './common/metrics/observability.module';
 
 import { REDACTED_LOG_PATHS } from './common/logging/redact';
 
@@ -51,6 +53,8 @@ import { REDACTED_LOG_PATHS } from './common/logging/redact';
     NotificationsModule,
     AdminModule,
     OnboardingModule,
+    FilesModule,
+    ObservabilityModule,
   ],
   controllers: [HealthController],
   providers: [

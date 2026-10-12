@@ -11,8 +11,6 @@ export interface RelayReport {
   readonly failed: number;
 }
 
-const SAVEPOINT = 'outbox_event';
-
 /**
  * Relais de l'outbox (docs/10 §5.8) : réserve un lot d'événements `pending` (`FOR UPDATE SKIP LOCKED`), planifie les
  * notifications et marque `processed`, dans UNE transaction. Chaque événement tourne sous un point de sauvegarde : une erreur
@@ -41,14 +39,15 @@ export class OutboxRelayService {
   }
 
   private async processEvent(tx: TenantTx, tenantId: string, event: NotificationOutboxEvent, now: Date): Promise<boolean> {
-    await tx.$executeRawUnsafe(`SAVEPOINT ${SAVEPOINT}`);
+    // Requêtes balisées sans interpolation (ESLint interdit `$executeRawUnsafe`) : le nom du point de sauvegarde est littéral.
+    await tx.$executeRaw`SAVEPOINT outbox_event`;
     try {
       await this.planning.handleEvent(tx, tenantId, event, now);
       await this.outbox.markProcessed(tx, tenantId, event.id, now);
-      await tx.$executeRawUnsafe(`RELEASE SAVEPOINT ${SAVEPOINT}`);
+      await tx.$executeRaw`RELEASE SAVEPOINT outbox_event`;
       return true;
     } catch (error: unknown) {
-      await tx.$executeRawUnsafe(`ROLLBACK TO SAVEPOINT ${SAVEPOINT}`);
+      await tx.$executeRaw`ROLLBACK TO SAVEPOINT outbox_event`;
       await this.recordFailure(tx, tenantId, event, error, now);
       return false;
     }

@@ -1,0 +1,276 @@
+# Tests unitaires des règles d'alerte (docs/13 D12, §11.3 point 6) : `promtool test rules` (infra/observability/test/check.sh).
+# Chaque alerte est prouvée en déclenchement ET en silence sur une série saine.
+rule_files:
+  - ../rules/ghmt-alerts.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # --- Disponibilité de l'API ---------------------------------------------------------------------------------------
+  - name: API injoignable pendant 2 minutes
+    interval: 1m
+    input_series:
+      - series: 'up{job="ghmt-api", instance="api:9464"}'
+        values: '1 1 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: GhmtApiDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: GhmtApiDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: ghmt-api, instance: "api:9464" }
+            exp_annotations:
+              summary: "API GHMT injoignable"
+              description: "Prometheus ne collecte plus api:9464 depuis 2 minutes."
+
+  - name: budget d'erreur consommé plus de 2 fois trop vite sur 1 h (5xx > 1 %)
+    interval: 1m
+    input_series:
+      # 1 000 requêtes par minute dont 20 en 5xx (2 %) : taux de consommation 4 fois le budget de 0,5 %.
+      - series: 'http_server_request_duration_seconds_count{job="ghmt-api", method="GET", route="/api/v1/patients", status_code="200"}'
+        values: '0+980x80'
+      - series: 'http_server_request_duration_seconds_count{job="ghmt-api", method="GET", route="/api/v1/patients", status_code="500"}'
+        values: '0+20x80'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: GhmtApiErrorBudgetBurn
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "Budget d'erreur de l'API consommé trop vite"
+              description: "2.00 % de réponses 5xx sur 1 h (seuil 1 % : 2 fois le budget du SLO 99,5 %)."
+
+  - name: budget d'erreur respecté (0,2 % de 5xx) - aucune alerte
+    interval: 1m
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{job="ghmt-api", method="GET", route="/api/v1/patients", status_code="200"}'
+        values: '0+998x80'
+      - series: 'http_server_request_duration_seconds_count{job="ghmt-api", method="GET", route="/api/v1/patients", status_code="500"}'
+        values: '0+2x80'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: GhmtApiErrorBudgetBurn
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: GhmtApiHigh5xxRate
+        exp_alerts: []
+
+  - name: taux de 5xx supérieur à 5 % sur 5 minutes
+    interval: 1m
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{job="ghmt-api", method="POST", route="/api/v1/invoices", status_code="201"}'
+        values: '0+90x20'
+      - series: 'http_server_request_duration_seconds_count{job="ghmt-api", method="POST", route="/api/v1/invoices", status_code="503"}'
+        values: '0+10x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: GhmtApiHigh5xxRate
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "Taux de réponses 5xx élevé"
+              description: "10.00 % de réponses 5xx sur 5 minutes."
+
+  # --- Latence (SLO docs/01 §8.2) ---------------------------------------------------------------------------------------
+  - name: p95 GET supérieur à 500 ms pendant 10 minutes
+    interval: 1m
+    input_series:
+      # Toutes les requêtes GET entre 0,5 s et 0,8 s : p95 ≈ 0,785 s.
+      - series: 'http_server_request_duration_seconds_bucket{job="ghmt-api", method="GET", route="/api/v1/patients", status_code="200", le="0.3"}'
+        values: '0x30'
+      - series: 'http_server_request_duration_seconds_bucket{job="ghmt-api", method="GET", route="/api/v1/patients", status_code="200", le="0.5"}'
+        values: '0x30'
+      - series: 'http_server_request_duration_seconds_bucket{job="ghmt-api", method="GET", route="/api/v1/patients", status_code="200", le="0.8"}'
+        values: '0+100x30'
+      - series: 'http_server_request_duration_seconds_bucket{job="ghmt-api", method="GET", route="/api/v1/patients", status_code="200", le="+Inf"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: GhmtApiGetLatencyHigh
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: GhmtApiGetLatencyHigh
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Latence p95 des GET au-dessus de 500 ms"
+              description: "p95 GET = 785 ms depuis 10 minutes (SLO : 300 ms)."
+
+  - name: p95 GET sous 300 ms - aucune alerte, et les 404 hors route ne comptent pas
+    interval: 1m
+    input_series:
+      - series: 'http_server_request_duration_seconds_bucket{job="ghmt-api", method="GET", route="/api/v1/patients", status_code="200", le="0.3"}'
+        values: '0+100x30'
+      - series: 'http_server_request_duration_seconds_bucket{job="ghmt-api", method="GET", route="/api/v1/patients", status_code="200", le="+Inf"}'
+        values: '0+100x30'
+      - series: 'http_server_request_duration_seconds_bucket{job="ghmt-api", method="GET", route="unmatched", status_code="404", le="0.3"}'
+        values: '0x30'
+      - series: 'http_server_request_duration_seconds_bucket{job="ghmt-api", method="GET", route="unmatched", status_code="404", le="+Inf"}'
+        values: '0+1000x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: GhmtApiGetLatencyHigh
+        exp_alerts: []
+
+  - name: p95 POST supérieur à 800 ms pendant 10 minutes
+    interval: 1m
+    input_series:
+      - series: 'http_server_request_duration_seconds_bucket{job="ghmt-api", method="POST", route="/api/v1/invoices", status_code="201", le="0.8"}'
+        values: '0x30'
+      - series: 'http_server_request_duration_seconds_bucket{job="ghmt-api", method="POST", route="/api/v1/invoices", status_code="201", le="1"}'
+        values: '0x30'
+      - series: 'http_server_request_duration_seconds_bucket{job="ghmt-api", method="POST", route="/api/v1/invoices", status_code="201", le="2"}'
+        values: '0+50x30'
+      - series: 'http_server_request_duration_seconds_bucket{job="ghmt-api", method="POST", route="/api/v1/invoices", status_code="201", le="+Inf"}'
+        values: '0+50x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GhmtApiPostLatencyHigh
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Latence p95 des POST au-dessus de 800 ms"
+              description: "p95 POST = 1950 ms depuis 10 minutes (SLO : 500 ms)."
+
+  # --- Dépendances et files -----------------------------------------------------------------------------------------
+  - name: limiteur de débit en repli mémoire
+    interval: 1m
+    input_series:
+      - series: 'ghmt_rate_limit_degraded{job="ghmt-api", instance="api:9464"}'
+        values: '0 0 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: GhmtRateLimitMemoryFallback
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: GhmtRateLimitMemoryFallback
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Limitation de débit en repli mémoire"
+              description: "Redis est indisponible pour l'API : la limitation n'est plus partagée entre instances."
+
+  - name: file de notifications en retard (jamais vidée pendant 10 minutes)
+    interval: 1m
+    input_series:
+      - series: 'ghmt_notifications_due_tenants{job="ghmt-api", instance="api:9464"}'
+        values: '3x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: GhmtNotificationsQueueLate
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "File de notifications en retard"
+              description: "3 établissement(s) ont des notifications dues depuis plus de 10 minutes."
+
+  - name: file de notifications vidée régulièrement - aucune alerte
+    interval: 1m
+    input_series:
+      - series: 'ghmt_notifications_due_tenants{job="ghmt-api", instance="api:9464"}'
+        values: '2 0 3 0 1 0 2 0 1 0 4 0 1 0 2 0'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: GhmtNotificationsQueueLate
+        exp_alerts: []
+
+  - name: antivirus indisponible (sonde /health/ready)
+    interval: 1m
+    input_series:
+      - series: 'probe_success{job="blackbox-antivirus", instance="http://api:3000/api/v1/health/ready"}'
+        values: '1 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: GhmtAntivirusDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: blackbox-antivirus, instance: "http://api:3000/api/v1/health/ready" }
+            exp_annotations:
+              summary: "Antivirus indisponible"
+              description: "clamd ne répond pas : les documents déposés restent en analyse et ne sont pas servis."
+
+  - name: certificat TLS expirant dans moins de 14 jours
+    interval: 1m
+    input_series:
+      # Expiration dans 10 jours (le temps de test commence à 0).
+      - series: 'probe_ssl_earliest_cert_expiry{job="blackbox-tls", instance="https://ghmt.example"}'
+        values: '864000x180'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: GhmtTlsCertificateExpiring
+        exp_alerts:
+          - exp_labels: { severity: warning, job: blackbox-tls, instance: "https://ghmt.example" }
+            exp_annotations:
+              summary: "Certificat TLS proche de l'expiration"
+              description: "Le certificat de https://ghmt.example expire dans 9.9 jour(s)."
+
+  # --- Sauvegardes (D9, D10) -----------------------------------------------------------------------------------------
+  - name: sauvegarde absente depuis plus de 26 heures
+    interval: 1m
+    input_series:
+      # Dernière sauvegarde réussie à t = 0 (horodatage 0) ; plus aucune ensuite (28 h 20 de collecte).
+      - series: 'ghmt_backup_last_success_timestamp_seconds{job="backup-metrics", instance="node-exporter:9100"}'
+        values: '0x1700'
+    alert_rule_test:
+      - eval_time: 25h
+        alertname: GhmtBackupMissing
+        exp_alerts: []
+      - eval_time: 28h
+        alertname: GhmtBackupMissing
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "Sauvegarde PostgreSQL absente"
+              description: "Aucune sauvegarde réussie depuis plus de 26 heures."
+
+  - name: aucune sauvegarde jamais enregistrée
+    interval: 1m
+    input_series:
+      - series: 'up{job="backup-metrics", instance="node-exporter:9100"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: GhmtBackupMissing
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "Sauvegarde PostgreSQL absente"
+              description: "Aucune sauvegarde réussie depuis plus de 26 heures."
+
+  - name: test de restauration en échec
+    interval: 1m
+    input_series:
+      - series: 'ghmt_restore_test_last_run_success{job="backup-metrics", instance="node-exporter:9100"}'
+        values: '1 1 0 0'
+      - series: 'ghmt_restore_test_last_run_timestamp_seconds{job="backup-metrics", instance="node-exporter:9100"}'
+        values: '0 0 120 120'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: GhmtRestoreTestFailed
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: GhmtRestoreTestFailed
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "Test de restauration en échec"
+              description: "Le dernier restore-test.sh a échoué : consulter son rapport JSON (runbook infra/deploy/README.md)."
+
+  - name: test de restauration non exécuté depuis plus de 8 jours
+    interval: 1m
+    input_series:
+      - series: 'ghmt_restore_test_last_run_success{job="backup-metrics", instance="node-exporter:9100"}'
+        values: '1x11700'
+      - series: 'ghmt_restore_test_last_run_timestamp_seconds{job="backup-metrics", instance="node-exporter:9100"}'
+        values: '0x11700'
+    alert_rule_test:
+      - eval_time: 190h
+        alertname: GhmtRestoreTestStale
+        exp_alerts: []
+      - eval_time: 194h
+        alertname: GhmtRestoreTestStale
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Test de restauration non exécuté"
+              description: "Aucun test de restauration depuis plus de 8 jours (attendu : chaque semaine)."

@@ -1,0 +1,19 @@
+# Sondes blackbox (docs/13 D12).
+modules:
+  # /health/ready de l'API (réseau interne) : en échec si l'antivirus est `down` (contrat figé docs/13 §5.1).
+  ready_antivirus:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      valid_status_codes: [200]
+      fail_if_body_matches_regexp:
+        - '"antivirus"\s*:\s*"down"'
+      preferred_ip_protocol: ip4
+  # Certificat public : la sonde expose probe_ssl_earliest_cert_expiry.
+  tls_certificate:
+    prober: tcp
+    timeout: 10s
+    tcp:
+      tls: true
+      preferred_ip_protocol: ip4

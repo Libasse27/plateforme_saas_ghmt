@@ -1,0 +1,14 @@
+# Exceptions de Trivy FS (.github/workflows/security.yml), revues à chaque échéance (`expired_at` : l'exception tombe seule).
+# Même liste que les `--ignore` de `pnpm audit` dans security.yml. Toutes concernent l'outillage de DÉVELOPPEMENT
+# (CLI Prisma, ESLint de Next.js) : `pnpm audit --prod` ne signale aucune vulnérabilité des dépendances d'exécution.
+# Correction attendue : `overrides` dans pnpm-workspace.yaml (fichier commun, hors périmètre de l'équipe CI, docs/13 §10).
+vulnerabilities:
+  - id: CVE-2026-40345
+    statement: "deepmerge-ts 7.x via @prisma/config (CLI prisma, dev) ; corrigé en 8.0.0"
+    expired_at: 2026-12-31
+  - id: CVE-2026-4800
+    statement: "lodash 4.17.21 via @prisma/studio-core (Prisma Studio, dev) ; corrigé en 4.18.0"
+    expired_at: 2026-12-31
+  - id: GHSA-3f6p-5ww8-9rcr
+    statement: "mysql2 via la CLI prisma (pilote MySQL jamais utilisé, base PostgreSQL) ; corrigé en 3.22.0"
+    expired_at: 2026-12-31

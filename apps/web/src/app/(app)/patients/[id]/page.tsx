@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { PatientDocuments } from '@/components/documents/PatientDocuments';
 import { ContactConsents } from '@/components/patients/ContactConsents';
 import { AccessDenied } from '@/components/ui/AccessDenied';
 import { Alert } from '@/components/ui/Alert';
@@ -10,6 +11,7 @@ import { isApiError } from '@/lib/api/errors';
 import { describeApiError } from '@/lib/api/messages';
 import { settle } from '@/lib/api/settle';
 import { canUse, hasPermission } from '@/lib/auth/me';
+import { toPatientDocuments } from '@/lib/documents/documents';
 import { newInvoiceHref } from '@/lib/domain/billing-links';
 import { toPatient } from '@/lib/domain/mappers';
 import { toContactConsents } from '@/lib/domain/notifications';
@@ -43,6 +45,8 @@ export default async function PatientPage({ params }: { readonly params: Promise
   const rows = patientSheetRows(patient);
   const banner = deceasedBanner(patient);
   const consentResult = hasPermission(me, 'patients:consent:read') ? await settle(() => pageApi(`/patients/${id}/contact-consents`)) : null;
+  const documentsResult = hasPermission(me, 'patients:identity_doc:read') ? await settle(() => pageApi(`/patients/${id}/documents`)) : null;
+  const documentsListing = documentsResult?.ok ? toPatientDocuments(documentsResult.value.data) : { documents: [], skipped: 0 };
 
   return (
     <>
@@ -72,6 +76,18 @@ export default async function PatientPage({ params }: { readonly params: Promise
         <ContactConsents patientId={patient.id} consents={toContactConsents(consentResult.value.data)} canUpdate={hasPermission(me, 'patients:consent:create')} timeZone={me.tenant.timezone} />
       ) : consentResult ? (
         <div className="mt-6"><Alert tone="error">Rappels de rendez-vous : {consentResult.message}</Alert></div>
+      ) : null}
+      {documentsResult?.ok ? (
+        <PatientDocuments
+          patientId={patient.id}
+          documents={documentsListing.documents}
+          skippedDocuments={documentsListing.skipped}
+          canCreate={hasPermission(me, 'patients:identity_doc:create')}
+          canDelete={hasPermission(me, 'patients:identity_doc:delete')}
+          timeZone={me.tenant.timezone}
+        />
+      ) : documentsResult ? (
+        <div className="mt-6"><Alert tone="error">Documents : {documentsResult.message}</Alert></div>
       ) : null}
       <p className="mt-4"><Link href="/patients" className="text-blue-800 underline">Retour à la liste</Link></p>
     </>

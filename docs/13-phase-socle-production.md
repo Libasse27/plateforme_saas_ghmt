@@ -222,3 +222,13 @@ Toutes arbitrées par l'utilisateur le 2026-10-11, conformément aux recommandat
 6. **Mises à jour des dépendances.** Recommandation : Dependabot (natif GitHub, aucune application à installer), regroupé par écosystème, hebdomadaire ; Renovate si un regroupement plus fin devient nécessaire.
 7. **Exposition de Grafana.** Recommandation : pas d'exposition publique au MVP, accès par tunnel SSH ; exposition derrière Traefik avec SSO à partir de P16.
 8. **Préproduction.** Recommandation : hors P13 tant qu'aucun hébergement n'est choisi ; la CI publie des images signées prêtes à déployer, et le test de fumée se joue en topologie de prod locale, comme au §12 de `11`.
+
+## 14. Revues de fin de phase (2026-10-12)
+Revues sécurité et santé du diff complet : aucun constat critique, 2 hauts, 5 moyens. Arbitrages de l'utilisateur, le 2026-10-12 (ils valent décisions pour la phase) :
+
+1. **Contenu actif des PDF (D8 durci).** Analyse en une passe, bornée en nombre de flux et en volume décompressé, en **échec fermé** : refus d'un PDF chiffré, d'un flux illisible ou trop volumineux, d'un filtre non géré (les filtres d'image sont acceptés sans décodage), et des noms `/JS`, `/JavaScript`, `/Launch`, `/EmbeddedFile(s)`, `/RichMedia`, `/XFA`, y compris sous forme encodée. `/OpenAction` et `/AA` restent acceptés (PDF scannés légitimes). Aucune bibliothèque de désinfection ajoutée.
+2. **Suppression d'un document.** Effacement cryptographique : la clé enveloppée est effacée de la ligne `deleted` (contrainte en base) ; les objets sont supprimés après la validation de la transaction ; le bucket `documents` reçoit une règle d'expiration des versions non courantes (30 jours). Les clés des documents supprimés subsistent dans les sauvegardes pendant leur rétention.
+3. **Authenticité des sauvegardes.** Le test de restauration est isolé dès P13 (PostgreSQL jetable sans secret ni variable S3, clé privée `age` lue seulement pendant le déchiffrement) ; la **signature du manifeste** par une clé hors ligne est reportée en **P14**, avec l'ancrage WORM du journal d'audit.
+4. **Réseaux d'observabilité.** Collector et services d'observabilité sur le seul réseau `observability`, rejoint par l'API ; `web`, `traefik`, `clamav` et les tâches de sauvegarde n'y ont pas accès. Pas de jeton sur `/metrics` ni sur OTLP au MVP.
+5. **Messages d'erreur dans les traces.** Les événements `exception` ne gardent que le type et le message de statut est générique, dans l'API et dans le Collector.
+6. **Publication des images.** Le digest publié est analysé par Trivy (HIGH et CRITICAL corrigeables) avant la signature cosign.

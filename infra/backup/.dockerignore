@@ -1,0 +1,5 @@
+# Contexte de construction de l’image de sauvegarde : uniquement les scripts et le manifeste npm.
+.work
+test
+node_modules
+*.md

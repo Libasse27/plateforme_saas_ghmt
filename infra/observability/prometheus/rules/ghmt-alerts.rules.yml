@@ -1,0 +1,132 @@
+# Règles d'alerte initiales (docs/13 D12, SLO de docs/01 §8.2). Destination : e-mail de l'astreinte (ALERT_EMAIL,
+# Alertmanager). Tests unitaires : prometheus/tests/ghmt-alerts.test.yml (`promtool test rules`, infra/observability/test/check.sh).
+# Aucune règle n'utilise de label tenant : les métriques n'en ont pas (D11).
+groups:
+  - name: ghmt-api
+    rules:
+      - alert: GhmtApiDown
+        expr: up{job="ghmt-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API GHMT injoignable"
+          description: "Prometheus ne collecte plus {{ $labels.instance }} depuis 2 minutes."
+
+      # SLO disponibilité 99,5 % mensuel : budget d'erreur 0,5 %. Alerte si consommé plus de 2 fois trop vite sur 1 h.
+      - alert: GhmtApiErrorBudgetBurn
+        expr: |
+          100 * sum(rate(http_server_request_duration_seconds_count{job="ghmt-api", status_code=~"5.."}[1h]))
+            / sum(rate(http_server_request_duration_seconds_count{job="ghmt-api"}[1h])) > 2 * 0.5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Budget d'erreur de l'API consommé trop vite"
+          description: "{{ printf \"%.2f\" $value }} % de réponses 5xx sur 1 h (seuil 1 % : 2 fois le budget du SLO 99,5 %)."
+
+      - alert: GhmtApiHigh5xxRate
+        expr: |
+          100 * sum(rate(http_server_request_duration_seconds_count{job="ghmt-api", status_code=~"5.."}[5m]))
+            / sum(rate(http_server_request_duration_seconds_count{job="ghmt-api"}[5m])) > 5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Taux de réponses 5xx élevé"
+          description: "{{ printf \"%.2f\" $value }} % de réponses 5xx sur 5 minutes."
+
+      # Les requêtes sans route (404 de chemins inconnus, sondes) sont exclues : elles ne mesurent pas le service.
+      - alert: GhmtApiGetLatencyHigh
+        expr: |
+          1000 * histogram_quantile(0.95,
+            sum by (le) (rate(http_server_request_duration_seconds_bucket{job="ghmt-api", method="GET", route!="unmatched"}[5m]))) > 500
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Latence p95 des GET au-dessus de 500 ms"
+          description: "p95 GET = {{ printf \"%.0f\" $value }} ms depuis 10 minutes (SLO : 300 ms)."
+
+      - alert: GhmtApiPostLatencyHigh
+        expr: |
+          1000 * histogram_quantile(0.95,
+            sum by (le) (rate(http_server_request_duration_seconds_bucket{job="ghmt-api", method="POST", route!="unmatched"}[5m]))) > 800
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Latence p95 des POST au-dessus de 800 ms"
+          description: "p95 POST = {{ printf \"%.0f\" $value }} ms depuis 10 minutes (SLO : 500 ms)."
+
+  - name: ghmt-dependances
+    rules:
+      # Même état que `checks.rateLimit: memory_fallback` de /health/ready.
+      - alert: GhmtRateLimitMemoryFallback
+        expr: max(ghmt_rate_limit_degraded{job="ghmt-api"}) == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Limitation de débit en repli mémoire"
+          description: "Redis est indisponible pour l'API : la limitation n'est plus partagée entre instances."
+
+      # Le dispatcher passe toutes les 10 s : une file saine retombe à 0 entre deux passes. Jamais vidée en 10 min : retard.
+      - alert: GhmtNotificationsQueueLate
+        expr: max(ghmt_notifications_due_tenants{job="ghmt-api"}) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "File de notifications en retard"
+          description: "{{ $value }} établissement(s) ont des notifications dues depuis plus de 10 minutes."
+
+      # Sonde blackbox de /api/v1/health/ready : échec si `checks.antivirus` vaut `down` (contrat figé docs/13 §5.1).
+      - alert: GhmtAntivirusDown
+        expr: probe_success{job="blackbox-antivirus"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Antivirus indisponible"
+          description: "clamd ne répond pas : les documents déposés restent en analyse et ne sont pas servis."
+
+      - alert: GhmtTlsCertificateExpiring
+        expr: (probe_ssl_earliest_cert_expiry{job="blackbox-tls"} - time()) / 86400 < 14
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Certificat TLS proche de l'expiration"
+          description: "Le certificat de {{ $labels.instance }} expire dans {{ printf \"%.1f\" $value }} jour(s)."
+
+  - name: ghmt-sauvegardes
+    rules:
+      # Fichiers .prom écrits par backup.sh et restore-test.sh (collecteur textfile de node_exporter).
+      - alert: GhmtBackupMissing
+        expr: |
+          (time() - max(ghmt_backup_last_success_timestamp_seconds) > 26 * 3600)
+            or absent(ghmt_backup_last_success_timestamp_seconds)
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Sauvegarde PostgreSQL absente"
+          description: "Aucune sauvegarde réussie depuis plus de 26 heures."
+
+      - alert: GhmtRestoreTestFailed
+        expr: max(ghmt_restore_test_last_run_success) == 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Test de restauration en échec"
+          description: "Le dernier restore-test.sh a échoué : consulter son rapport JSON (runbook infra/deploy/README.md)."
+
+      - alert: GhmtRestoreTestStale
+        expr: time() - max(ghmt_restore_test_last_run_timestamp_seconds) > 8 * 86400
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Test de restauration non exécuté"
+          description: "Aucun test de restauration depuis plus de 8 jours (attendu : chaque semaine)."

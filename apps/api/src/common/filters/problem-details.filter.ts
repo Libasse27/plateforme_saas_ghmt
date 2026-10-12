@@ -31,21 +31,24 @@ function fromDatabaseError(err: unknown): DomainError | undefined {
 const LOG_MESSAGE_MAX_LENGTH = 200;
 
 const PRISMA_CODE = /^P\d{4}$/;
+/** Code SQLSTATE d'une erreur `pg` brute (ex. `22P02`) : son message peut citer la valeur saisie (docs/13 §14.5). */
+const SQLSTATE_CODE = /^[0-9A-Z]{5}$/;
 
-function isPrismaError(e: { name?: unknown; code?: unknown } | null | undefined): boolean {
-  return (typeof e?.name === 'string' && e.name.startsWith('Prisma')) || (typeof e?.code === 'string' && PRISMA_CODE.test(e.code));
+function isDatabaseError(e: { name?: unknown; code?: unknown } | null | undefined): boolean {
+  if (typeof e?.name === 'string' && e.name.startsWith('Prisma')) return true;
+  return typeof e?.code === 'string' && (PRISMA_CODE.test(e.code) || SQLSTATE_CODE.test(e.code));
 }
 
 /**
  * Résumé journalisable d'une erreur inattendue : nom, code et message tronqué uniquement.
  * Jamais l'objet d'erreur entier (requêtes SQL, paramètres, corps de requête pouvant contenir des données de santé).
- * Pour une erreur Prisma, le message peut citer des valeurs de colonnes : seuls `name` et `code` sont conservés.
+ * Pour une erreur Prisma ou PostgreSQL, le message peut citer des valeurs de colonnes : seuls `name` et `code` sont conservés.
  */
 export function summarizeError(exception: unknown): { name: string; code: string | null; message?: string } {
   const e = exception as { name?: unknown; code?: unknown; message?: unknown } | null | undefined;
   const name = typeof e?.name === 'string' ? e.name : typeof exception;
   const code = typeof e?.code === 'string' ? e.code : null;
-  if (isPrismaError(e)) return { name, code };
+  if (isDatabaseError(e)) return { name, code };
   return { name, code, message: (typeof e?.message === 'string' ? e.message : '').slice(0, LOG_MESSAGE_MAX_LENGTH) };
 }
 

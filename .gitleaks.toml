@@ -1,0 +1,32 @@
+# Configuration gitleaks (docs/13 §11.1 point 3), exécutée par .github/workflows/security.yml sur tout l'historique.
+# Règles par défaut de gitleaks, plus une liste d'exclusion DOCUMENTÉE et la plus étroite possible.
+# Toute nouvelle exclusion : une entrée ci-dessous avec sa justification, jamais d'exclusion par empreinte d'un vrai secret
+# (un vrai secret divulgué se révoque, il ne s'exclut pas). Preuve : scripts/ci/tests/gitleaks-config.test.mjs.
+title = "GHMT"
+
+[extend]
+useDefault = true
+
+# 1. Tests : mots de passe, jetons de réinitialisation et d'invitation FICTIFS des fixtures (TOKEN, newPassword…).
+#    Seule la règle générique est levée : les détecteurs spécifiques (clés privées, jetons GitHub, AWS…) restent actifs.
+[[allowlists]]
+description = "Valeurs fictives des fixtures de test (règle générique seulement)"
+targetRules = ["generic-api-key"]
+paths = ['''\.(spec|test|e2e-spec)\.(ts|tsx|mts|mjs)$''']
+
+# 2. Documentation de l'API : exemples de réponses (accessToken, mfaToken, Idempotency-Key) sans valeur réelle.
+[[allowlists]]
+description = "Exemples de la documentation de l'API (règle générique seulement)"
+targetRules = ["generic-api-key"]
+paths = ['''(^|/)docs/03-api\.md$''']
+
+# 3. Identifiants de DÉVELOPPEMENT de la pile jetable infra/docker-compose.yml (rôles de infra/postgres/init/01-roles.sql,
+#    SeaweedFS), repris par apps/api/.env.example et scripts/ci/generate-env-test.mjs. Jamais utilisés hors dev et CI.
+[[allowlists]]
+description = "Identifiants de la pile de développement"
+regexTarget = "match"
+regexes = [
+  '''ghmt_(app|platform|migrator)_dev''',
+  '''ghmt_dev_only''',
+  '''ghmt-dev-s3-secret''',
+]

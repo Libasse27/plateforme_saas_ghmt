@@ -95,6 +95,12 @@ describe('loadEnv : observabilité', () => {
     expect(env.OTEL_EXPORTER_OTLP_ENDPOINT).toBeUndefined();
     expect(env.OTEL_SERVICE_NAME).toBe('ghmt-api');
     expect(env.METRICS_PORT).toBe(9464);
+    expect(env.METRICS_HOST).toBe('0.0.0.0');
+  });
+
+  it('accepte une adresse d’écoute des métriques (IP seulement)', () => {
+    expect(loadEnv({ ...BASE, METRICS_HOST: '172.29.0.10' }).METRICS_HOST).toBe('172.29.0.10');
+    expect(() => loadEnv({ ...BASE, METRICS_HOST: 'api.example' })).toThrow(/METRICS_HOST/);
   });
 
   it("exige l'endpoint OTLP quand OTEL_ENABLED=true", () => {

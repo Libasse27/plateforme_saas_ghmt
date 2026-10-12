@@ -11,6 +11,13 @@ Internet ──► Traefik (80/443, seul port publié) ──► web   (réseau 
                                    └── base PostgreSQL gérée, SMTP (réseau `egress`)
 ```
 
+**Réseau `observability` (interne, `172.29.0.0/24`)** : seuls y sont rattachés l'`api` (adresse fixe `172.29.0.10`), le Collector et les services du profil `observability` (Prometheus, Alertmanager, Grafana, Loki, Tempo, exportateurs). `web`, `traefik`, `clamav`, `redis` et les tâches `backup`/`restore-test`/`prune` n'y sont **pas** : ils ne peuvent joindre ni le Collector ni les métriques. Qui joint quoi :
+
+- **`api:9464` (métriques)** : l'API n'écoute que sur `METRICS_HOST=172.29.0.10` (son adresse sur `observability`), pas sur `edge` ni `data` ; seul Prometheus (et tout autre service de `observability`) peut donc la joindre, même si le `web` partage le réseau `edge` avec l'API. `METRICS_HOST` vaut `0.0.0.0` par défaut (développement, tests).
+- **Collector `otel-collector:4318` (OTLP)** : joint par l'API (qui y envoie traces et journaux) et par Prometheus (`:8888`, ses propres métriques) ; il n'est que sur `observability` et n'exporte que vers Tempo et Loki, sur ce réseau. Pour exporter vers un service externe (`OTEL_TRACES_ENDPOINT`, `OTEL_LOGS_ENDPOINT`), il faut lui ajouter le réseau `egress` par une surcharge de compose : ce n'est pas le cas par défaut, pour que le seul service qui voit tous les journaux et toutes les traces n'ait pas de sortie.
+- **`web`** n'envoie pas de traces (aucune instrumentation OpenTelemetry côté Next.js dans cette phase) : il n'a donc pas besoin du Collector. Si cela change, lui donner un jeton d'ingestion et un réseau dédié plutôt que de le rattacher à `observability`.
+- `infra/observability/test/check.sh` vérifie ces rattachements (aucun de `web`, `traefik`, `clamav`, `redis`, `backup`, `restore-test`, `prune` sur `observability`, Collector seul sur `observability`).
+
 Fichiers : `compose.prod.yml` (référence), `traefik/dynamic.yml` (routeurs, secret de bordure, limite d'entrée), `entrypoint-secrets.sh` et `init-secrets.sh` (secrets Docker), `check-pinned-images.sh` (images épinglées par digest, exécuté en CI).
 
 **Routage public** : le routeur `web` sert tout le site ; le routeur `api` est limité à `/api/v1/webhooks` (webhooks des fournisseurs, signés) et à `/api/v1/health` (sonde minimale `{ status }`). Le BFF joint l'API en interne (`http://api:3000`) : `/api/v1/auth/*`, `/api/v1/health/ready` (détail) et le reste de l'API ne sont **jamais** routés publiquement.
@@ -74,10 +81,145 @@ curl -kI https://$DOMAIN/connexion
 # 6. Journaux : ni jeton ni secret de bordure
 docker compose -f infra/deploy/compose.prod.yml logs api web | grep -c "$EDGE_PROXY_SECRET"   # attendu : 0
 # 7. Images épinglées
-infra/deploy/check-pinned-images.sh infra/docker-compose.yml infra/deploy/compose.prod.yml
+COMPOSE_PROFILES=observability,tools infra/deploy/check-pinned-images.sh infra/docker-compose.yml infra/deploy/compose.prod.yml
 ```
 
 Le health check de l'API est `GET /api/v1/health` ; celui du BFF présente le secret de bordure (sinon `proxy.ts` répondrait 403).
+
+## Socle de production (docs/13) : stockage, antivirus, sauvegardes, observabilité
+
+```
+api ──► clamav            (réseau interne `data`, aucun port ; `egress` pour freshclam seulement)
+api ──► stockage objet    (EXTERNE, https, secrets s3_access_key_id / s3_secret_access_key)
+api ──► otel-collector    (OTLP http://otel-collector:4318, réseau `observability`) ──► Tempo, Loki (profil observability)
+api:9464 ◄── Prometheus   (réseau interne `observability`, JAMAIS routé par Traefik) ──► Alertmanager ──► ALERT_EMAIL
+backup / restore-test / prune (profil tools, cron de l'hôte) ──► base gérée + bucket de sauvegarde (réseau `egress`)
+```
+
+Fichiers : `compose.prod.yml` (services `clamav`, `otel-collector`, profils `tools` et `observability`), `traefik/dynamic.yml` (middleware `upload-limit` : corps limité à 11 Mo sur le routeur `web`), `../backup/` (scripts et image des sauvegardes), `../observability/` (Collector, Prometheus et règles d'alerte, Alertmanager, Loki, Tempo, Grafana, sondes blackbox).
+
+### Secrets et variables ajoutés
+
+| Secret (`secrets/…`) | Contenu | Fourni par |
+|---|---|---|
+| `s3_access_key_id`, `s3_secret_access_key` | identifiants S3 de l'application (buckets `quarantine` et `documents`) | fournisseur de stockage |
+| `backup_database_url` | `postgresql://ghmt_backup:…@hôte:5432/ghmt?sslmode=verify-full` | coffre (rôle ci-dessous) |
+| `backup_s3_access_key_id`, `backup_s3_secret_access_key` | identifiants S3 **distincts**, limités au bucket de sauvegarde | fournisseur de stockage |
+| `backup_age_recipient` | clé **publique** age (`age1…`) | `age-keygen` sur le poste hors ligne |
+| `backup_age_identity` | clé **privée** age : **uniquement** sur l'hôte de vérification (jamais en production) | poste hors ligne |
+| `alertmanager_smtp_password` | mot de passe SMTP de l'astreinte | coffre |
+| `grafana_admin_password` | `openssl rand -base64 32` | exploitant |
+
+Variables non secrètes (`.env`) : `S3_ENDPOINT` (https), `S3_REGION`, `S3_BUCKET_QUARANTINE`, `S3_BUCKET_DOCUMENTS`, `BACKUP_BUCKET`, `BACKUP_S3_ENDPOINT`, `BACKUP_S3_REGION`, `ALERT_EMAIL`, `ALERT_SMTP_USER` ; facultatives : `FILES_ENABLED` (défaut `true`), `BACKUP_LOCK_MODE` (`COMPLIANCE`), `OTEL_TRACES_ENDPOINT`, `OTEL_LOGS_ENDPOINT` (Tempo et Loki du profil par défaut).
+
+### Rôle `ghmt_backup` (avant la migration `20261012000200_backup_role`)
+
+`BYPASSRLS` ne peut être attribué que par un superutilisateur : l'administrateur de la base gérée crée le rôle, **avant** `prisma migrate deploy`, avec un mot de passe tiré du coffre (jamais dans une migration ni un fichier versionné) :
+
+```sql
+CREATE ROLE ghmt_backup LOGIN PASSWORD '<coffre>' BYPASSRLS NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+GRANT CONNECT ON DATABASE ghmt TO ghmt_backup;
+```
+
+La migration vérifie ces attributs (elle échoue sinon) et n'accorde que `USAGE` sur les schémas et `SELECT` sur les tables et séquences, présentes et futures : aucune écriture. Si le fournisseur refuse `BYPASSRLS`, ne pas affaiblir la RLS : utiliser son rôle d'export dédié et le signaler (la sauvegarde logique serait sinon vide pour les tables à RLS forcée). En dev et en CI, le rôle est créé par `infra/postgres/init/01-roles.sql`.
+
+### Bucket de sauvegarde
+
+1. Créer le bucket **avec verrouillage d'objet** (impossible à activer après coup) et le versionnage, rétention par défaut `COMPLIANCE` 35 jours, dans la même juridiction que la base.
+2. Trois jeux d'identifiants, aucun partagé avec l'application : écriture (`backup` : `PutObject`, `GetObject` pour le contrôle de taille, `ListBucket` pour savoir si le mois a déjà une sauvegarde réussie ; sans ce droit, chaque sauvegarde reçoit le verrou long de 366 jours par précaution), lecture (`restore-test` : `ListBucket`, `GetObject`), rétention (`prune`, seulement sans règle de cycle de vie : `ListBucketVersions`, `DeleteObjectVersion`).
+3. Chaque sauvegarde dépose `postgres/aaaa/mm/jj/ghmt-<horodatage>.dump.age` (dump `-Fc` chiffré age, SHA-256 vérifié par le stockage) et `….manifest.json` (taille, SHA-256, comptage de chaque table dans le même instantané que le dump, rôles référencés). La **première sauvegarde réussie** de chaque mois (celle dont le manifeste existe ; pas forcément celle du 1er, qui peut avoir échoué) est verrouillée 366 jours (12 mensuelles) ; `prune.sh` applique la même règle.
+4. Les documents des patients ne passent pas par ces scripts : versionnage et réplication du bucket `documents` (voir « Effacement des documents » ci-dessous : le versionnage impose une règle de cycle de vie).
+
+### Effacement des documents : cycle de vie obligatoire du bucket `documents`
+
+Le bucket `documents` est **versionné** : `DeleteObject` ne pose qu'un marqueur de suppression, la version courante reste lisible par son identifiant de version. Sans règle de cycle de vie, un document « effacé » ne l'est donc jamais. **Règle obligatoire** (à poser avant la mise en production, et à vérifier à chaque revue d'exploitation) : expiration des versions non courantes après 30 jours, et nettoyage des marqueurs orphelins.
+
+```json
+{
+  "Rules": [
+    {
+      "ID": "expire-versions-non-courantes",
+      "Status": "Enabled",
+      "Filter": {},
+      "NoncurrentVersionExpiration": { "NoncurrentDays": 30 },
+      "Expiration": { "ExpiredObjectDeleteMarker": true },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    }
+  ]
+}
+```
+
+```bash
+aws s3api put-bucket-lifecycle-configuration --bucket "$S3_BUCKET_DOCUMENTS" --lifecycle-configuration file://documents-lifecycle.json
+aws s3api get-bucket-lifecycle-configuration --bucket "$S3_BUCKET_DOCUMENTS"   # à consigner dans le registre d'exploitation
+```
+
+Si la réplication du bucket est active, appliquer la même règle au bucket répliqué. L'**effacement cryptographique** complète le dispositif : à la suppression d'un document, l'API efface en base la clé enveloppée de ce document, de sorte que les octets chiffrés restants (versions non courantes pendant 30 jours, réplicas) deviennent illisibles. Les **sauvegardes** de la base conservent en revanche cette clé enveloppée pendant leur rétention (35 jours, jusqu'à 366 jours pour les mensuelles) : un document supprimé reste donc théoriquement récupérable par restauration d'une sauvegarde pendant cette durée, tant que ses octets existent encore dans le bucket (30 jours au plus après la suppression). Le délai d'effacement effectif annoncé aux établissements est celui de la rétention des sauvegardes.
+
+### Sauvegarde quotidienne (cron de l'hôte de production)
+
+```bash
+docker compose -f infra/deploy/compose.prod.yml --env-file infra/deploy/.env --profile tools build backup
+# /etc/cron.d/ghmt-backup (utilisateur de déploiement) : sauvegarde à 02:15 UTC, rétention à 03:30
+15 2 * * * deploy cd /opt/ghmt && docker compose -f infra/deploy/compose.prod.yml --env-file infra/deploy/.env --profile tools run --rm backup >> /var/log/ghmt/backup.log 2>&1
+30 3 * * * deploy cd /opt/ghmt && docker compose -f infra/deploy/compose.prod.yml --env-file infra/deploy/.env --profile tools run --rm prune  >> /var/log/ghmt/backup.log 2>&1
+```
+
+Sortie : une ligne JSON `{ status, key, bytes, sha256, durationMs }` (ou `{ status: "error", stage }` et un code non nul). Le résultat est aussi écrit pour Prometheus (volume `backup-metrics`, collecteur textfile de `node-exporter`) : l'alerte `GhmtBackupMissing` se déclenche sans sauvegarde réussie depuis plus de 26 h. Aucun secret ni chaîne de connexion n'est affiché.
+
+### Test de restauration (D10)
+
+`restore-test.sh` prend la dernière sauvegarde (ou `BACKUP_KEY`), refuse une taille ou une empreinte différente du manifeste, déchiffre (vers un fichier du répertoire de travail `0700`), restaure dans un PostgreSQL **jetable interne au conteneur** (127.0.0.1, détruit à la fin) et contrôle : comptage de chaque table (égal au manifeste), `prisma migrate status` (à jour), chaîne d'audit de chaque tenant (empreintes recalculées), RLS activée et forcée avec politique sur chaque table `tenant.*`. Rapport JSON `{ status, backupKey, restoreMs, durationMs, checks }`, code non nul au moindre échec. En cas d'échec de `pg_restore`, le rapport ne reprend que la catégorie de l'erreur (p. ex. `could not execute query`, `COPY failed for table "…"`), jamais le message du serveur, qui peut citer des valeurs de données.
+
+**Isolation de la restauration.** Une sauvegarde forgée rejouée par `pg_restore` en superutilisateur pourrait exécuter du SQL (`COPY … TO PROGRAM`). Le script limite l'exposition : la clé privée age n'est lue que pendant le déchiffrement ; les identifiants S3 sont retirés de l'environnement dès la sauvegarde téléchargée ; PostgreSQL jetable et `pg_restore` démarrent avec un environnement **vidé** (`env -i`, seulement `PATH`, `HOME`, `TMPDIR`) ; `roundtrip.sh` le vérifie avec une archive forgée (le SQL s'exécute, son environnement ne contient aucun secret). **Risque résiduel** : le PostgreSQL jetable tourne sous le même uid que le script (conteneur non root, sans capacité pour changer d'uid) ; un fichier de `/run/secrets` lisible par cet uid resterait donc lisible par du SQL forgé. En conséquence : le conteneur `restore-test` ne monte **que** `backup_age_identity` et les identifiants de **lecture** du bucket (c'est le cas dans `compose.prod.yml`) ; ne jamais y ajouter d'autre secret ni d'autre volume, ni l'exécuter sur l'hôte de production. La **signature du manifeste** (qui fera refuser toute sauvegarde non émise par `backup.sh`) est reportée en **P14** : d'ici là, la protection repose sur le contrôle d'accès en écriture du bucket de sauvegarde (jeu d'identifiants d'écriture distinct, verrouillage d'objet).
+
+- **Chaque nuit, en CI** : aller-retour sur la base de test (`infra/backup/test/roundtrip.sh`, qui vérifie aussi l'échec sur une sauvegarde tronquée).
+- **Chaque semaine, production** : la clé privée ne doit jamais se trouver sur l'hôte de production (D9). Le test tourne donc sur l'**hôte de vérification** qui détient `secrets/backup_age_identity` (même dépôt, mêmes identifiants de **lecture** du bucket) :
+
+```bash
+# hôte de vérification, dimanche 05:00 UTC ; MAILTO envoie la sortie en échec à l'astreinte
+MAILTO=astreinte@exemple
+0 5 * * 0 verif cd /opt/ghmt && docker compose -f infra/deploy/compose.prod.yml --env-file infra/deploy/.env --profile tools run --rm restore-test > /var/log/ghmt/restore-test.json || cat /var/log/ghmt/restore-test.json
+```
+
+  Consigner `restoreMs` (durée de restauration) dans le registre d'exploitation. Si l'hôte de vérification exécute aussi le profil `observability` (ou si l'on monte ponctuellement la clé depuis un support hors ligne sur l'hôte de production), les alertes `GhmtRestoreTestFailed` et `GhmtRestoreTestStale` (plus de 8 jours) s'appliquent ; sans métrique, elles restent muettes et `MAILTO` fait foi.
+- Espace et confidentialité : le dump déchiffré **et** la base restaurée sont écrits en clair dans le volume `restore-work` (prévoir 3 fois la taille de la base). Ce volume doit résider sur le **disque chiffré de l'hôte de vérification** (ou être un `tmpfs` dimensionné : `driver_opts: { type: tmpfs, device: tmpfs, o: size=…g }`). Le script supprime ces fichiers à la sortie et **purge au démarrage** tout répertoire `ghmt-backup.*` résiduel de `BACKUP_WORK_DIR` (exécution tuée par SIGKILL, redémarrage de l'hôte) ; une seule exécution à la fois par volume.
+
+### Restauration réelle (incident)
+
+1. Geler les écritures (arrêter `api`), ouvrir un incident, prévenir la direction des établissements concernés.
+2. Sur l'hôte de vérification : `restore-test.sh` sur la sauvegarde choisie (`BACKUP_KEY=postgres/…`) pour prouver qu'elle est saine.
+3. Base cible neuve chez le fournisseur ; créer les rôles (`ghmt_migrator`, `ghmt_app`, `ghmt_platform`, `ghmt_backup`) avec de **nouveaux** mots de passe, puis :
+   `age -d -i backup_age_identity ghmt-….dump.age | pg_restore --exit-on-error --no-password -d "<URL de ghmt_migrator ou du propriétaire>"`
+4. `prisma migrate status` (tâche de migration), contrôles du rapport (comptages, chaîne d'audit via la console, RLS), puis bascule des secrets `database_url`, `platform_database_url`, `migration_database_url`, `backup_database_url` et redémarrage.
+5. Le PITR du fournisseur reste la voie de reprise la plus fine (perte de données minimale) ; la sauvegarde logique est le recours indépendant du fournisseur.
+
+**Base auto-hébergée** (hors topologie de référence) : ajouter pgBackRest (sauvegarde complète hebdomadaire, différentielle quotidienne, archivage WAL continu vers un dépôt S3 chiffré `repo1-cipher-type=aes-256-cbc`, `repo1-retention-full=5`), en plus de `backup.sh` ; tester `pgbackrest restore --type=time` chaque trimestre.
+
+### Observabilité (profil `observability`)
+
+```bash
+docker compose -f infra/deploy/compose.prod.yml --env-file infra/deploy/.env --profile observability up -d
+# Grafana n'est PAS publié (docs/13 Q7) : tunnel SSH vers son adresse fixe du réseau `admin`, puis http://localhost:3000
+ssh -N -L 3000:172.31.0.10:3000 deploy@<hôte>
+```
+
+- **Traces** : l'API démarre OpenTelemetry avant Nest (`node --require ./dist/instrumentation.js dist/main.js`) ; HTTP, Express, Nest, PostgreSQL, Redis, Prisma ; jamais d'en-tête, de corps, de query string, ni de valeur de paramètre SQL ; `ghmt.tenant.id` en attribut. **Messages d'erreur** : jamais exportés (une erreur pg ou Prisma cite des valeurs saisies) : le statut d'un span en erreur est ramené à `error`, un événement `exception` ne garde que `exception.type` (assaini par l'API, puis une seconde fois par le Collector). Le Collector masque une seconde fois et garde 100 % des traces en erreur, 10 % des autres.
+- **Journaux** : chaque ligne Pino porte `traceId`, `spanId` et `tenantId` ; envoyée aussi au Collector, puis à Loki (30 jours). Dans Grafana, un `traceId` de Loki ouvre la trace dans Tempo. Les journaux d'erreur 500 de l'API ne portent que le nom, le code et un message tronqué (jamais celui d'une erreur Prisma ni d'une erreur pg brute, reconnue à son code SQLSTATE : `summarizeError`) ; le Collector ne pouvant pas masquer un corps de journal, ce filtrage est fait par l'API.
+- **Métriques** : `api:9464/metrics` (`METRICS_PORT`, écoute sur `METRICS_HOST`), serveur distinct de l'API, jamais routé par Traefik ; latence par **gabarit** de route (`http_server_request_duration_seconds`), jamais de label `tenantId`.
+- **Alertes** (`../observability/prometheus/rules/ghmt-alerts.rules.yml`, tests `promtool test rules`) vers `ALERT_EMAIL` : API injoignable, budget d'erreur (5xx > 1 % sur 1 h), taux de 5xx, p95 `GET` > 500 ms et `POST` > 800 ms pendant 10 min, limiteur en repli mémoire, file de notifications jamais vidée en 10 min, antivirus `down` (sonde de `/health/ready`), certificat < 14 jours, sauvegarde absente > 26 h, test de restauration en échec ou absent.
+- **Alerte de test** : `docker compose … exec alertmanager amtool alert add GhmtTest severity=warning --annotation=summary="Alerte de test" --alertmanager.url=http://localhost:9093`, puis vérifier la réception de l'e-mail.
+
+Vérifications (en plus de celles ci-dessus) :
+
+```bash
+infra/observability/test/check.sh          # promtool (règles et tests), amtool, otelcol validate, compose, ports, réseau observability, digests
+infra/backup/test/roundtrip.sh             # lib.sh, sauvegarde -> restauration -> tronquée -> forgée, rétention (pile de dev)
+# Le port de métriques n'est joignable ni depuis l'hôte ni via Traefik
+curl -m 3 http://localhost:9464/metrics    # attendu : échec de connexion
+curl -k -o /dev/null -w '%{http_code}\n' https://$DOMAIN/metrics   # attendu : réponse du BFF (pas de métriques)
+# Aucun secret, jeton ni nom de patient dans les journaux et les traces (Loki, Tempo) : recherche par motif dans Grafana Explore
+```
 
 ## Astreinte : téléphone perdu ou second facteur inaccessible (docs/11 §14.3.5)
 

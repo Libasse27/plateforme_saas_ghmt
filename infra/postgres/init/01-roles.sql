@@ -18,3 +18,9 @@ GRANT CONNECT ON DATABASE ghmt TO ghmt_platform;
 GRANT CREATE ON DATABASE ghmt TO ghmt_migrator;
 -- DEV UNIQUEMENT : base fantôme de `prisma migrate dev`.
 ALTER ROLE ghmt_migrator CREATEDB;
+
+-- ghmt_backup : sauvegarde logique (pg_dump, docs/13 D9), lecture seule de tout le contenu sans contexte de tenant.
+-- BYPASSRLS ne peut être attribué que par un superutilisateur : le rôle est donc créé ici (en production, par
+-- l'administrateur de la base gérée), et la migration 20261012000200_backup_role lui accorde SELECT, sans écriture.
+CREATE ROLE ghmt_backup LOGIN PASSWORD 'ghmt_backup_dev' BYPASSRLS NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+GRANT CONNECT ON DATABASE ghmt TO ghmt_backup;

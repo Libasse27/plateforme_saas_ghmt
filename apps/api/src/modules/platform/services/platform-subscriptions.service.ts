@@ -68,7 +68,7 @@ export class PlatformSubscriptionsService {
   }
 
   /** Vue complète : plan, droits effectifs (plan ⊕ dérogations) et usage (comptes agrégés, aucune donnée patient). */
-  async viewIn(tx: PlatformTx, tenantId: string, now: Date): Promise<PlatformSubscriptionView | null> {
+  async viewIn(tx: PlatformTx, tenantId: string, _now: Date): Promise<PlatformSubscriptionView | null> {
     const subscription = await tx.subscription.findUnique({ where: { tenantId } });
     if (!subscription) return null;
     const plan = await this.repository.findPlan(tx, subscription.planId);

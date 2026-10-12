@@ -1,0 +1,112 @@
+# Intégration continue (docs/13 D1, §11.1 points 1, 2 et 5) : aucune modification n'entre dans `main` sans ce pipeline vert
+# (branche protégée, contrôles requis : « Lint, types, tests et build », « Images épinglées », « Workflows »).
+# Les tests e2e tournent contre la pile infra/docker-compose.yml démarrée dans le job (l'init des rôles PostgreSQL est montée) ;
+# le .env.test est généré avec des secrets aléatoires : aucun secret de dépôt, PR de forks comprises.
+# Dépôt public : aucune étape n'affiche de variable d'environnement ni de chaîne de connexion.
+# Actions épinglées par SHA de commit (version en commentaire, mise à jour par Dependabot).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verification:
+    name: Lint, types, tests et build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # ClamAV télécharge ses signatures au démarrage (plusieurs minutes) : lancé d'abord, attendu juste avant les tests.
+      - name: Démarrer la pile de test (PostgreSQL 17, Redis 7, Mailpit, S3, ClamAV)
+        run: docker compose -f infra/docker-compose.yml up -d --quiet-pull
+
+      - name: Installer pnpm (version de packageManager)
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Installer Node.js (.nvmrc)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Installer les dépendances (lockfile figé)
+        run: pnpm install --frozen-lockfile
+
+      - name: Générer apps/api/.env.test (secrets aléatoires)
+        run: node scripts/ci/generate-env-test.mjs --database ghmt_test --redis-db 14
+
+      - name: Générer le client Prisma
+        run: pnpm --filter @ghmt/api exec prisma generate
+
+      - name: Attendre la pile de test
+        run: docker compose -f infra/docker-compose.yml up -d --wait --wait-timeout 600
+
+      # Un échec de lint, de type, de test (unitaire ou e2e) ou de build fait échouer le job.
+      - name: Lint, typecheck, tests et build (Turborepo)
+        run: pnpm exec turbo run lint typecheck test build
+
+      - name: Tests des outils de CI (règles ESLint, .env.test, migrations, gitleaks)
+        run: node --test 'scripts/ci/tests/*.test.mjs'
+
+      - name: Contrôle des migrations (écart Prisma, RLS activée et forcée)
+        run: node scripts/ci/check-migrations.mjs
+
+      # Diagnostic sans variables : état des conteneurs et dernières lignes de PostgreSQL seulement.
+      - name: État de la pile en cas d'échec
+        if: failure()
+        run: |
+          docker compose -f infra/docker-compose.yml ps
+          docker compose -f infra/docker-compose.yml logs --no-color --tail 100 postgres
+
+      - name: Arrêter la pile
+        if: always()
+        run: docker compose -f infra/docker-compose.yml down --volumes
+
+  images-epinglees:
+    name: Images épinglées
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Valeurs factices et publiques : seule l'interpolation de `docker compose config` les exige, rien n'est déployé.
+      - name: Contrôle des digests (compose de développement et de production)
+        env:
+          DOMAIN: ci.invalid
+          JWT_ISSUER: https://api.ci.invalid
+          JWT_AUDIENCE: ghmt-api
+          MAIL_FROM: GHMT <ci@ci.invalid>
+          SMTP_HOST: smtp.ci.invalid
+        run: bash infra/deploy/check-pinned-images.sh infra/docker-compose.yml infra/deploy/compose.prod.yml
+
+  workflows:
+    name: Workflows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # rhysd/actionlint:1.7.12 (inclut shellcheck pour les blocs `run`).
+      - name: actionlint
+        run: >-
+          docker run --rm -v "$GITHUB_WORKSPACE:/repo:ro" -w /repo
+          rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color

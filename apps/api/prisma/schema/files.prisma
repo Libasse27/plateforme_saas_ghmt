@@ -1,0 +1,64 @@
+// Documents (docs/13-phase-socle-production.md §3.1) : métadonnées des fichiers déposés, objets chiffrés dans le stockage S3.
+// Aucune relation vers les modèles de core.prisma : les clés étrangères composites (tenant_id, …), les CHECK, l'index partiel
+// et le RLS sont créés en SQL (migration 20261012000100_files).
+
+enum FilePurpose {
+  identity
+  insurance_card
+  administrative
+
+  @@map("file_purpose")
+  @@schema("tenant")
+}
+
+enum FileStatus {
+  pending
+  available
+  rejected
+  deleted
+
+  @@map("file_status")
+  @@schema("tenant")
+}
+
+enum FileRejectReason {
+  infected
+  type_not_allowed
+  active_content
+  scan_unavailable
+
+  @@map("file_reject_reason")
+  @@schema("tenant")
+}
+
+/// Fichier déposé : seul l'objet chiffré est stocké (clé de données enveloppée dans `wrapped_key`, docs/13 D4).
+/// Un fichier qui n'est pas `available` n'est jamais servi.
+model StoredFile {
+  id           String            @default(uuid(7)) @db.Uuid
+  tenantId     String            @map("tenant_id") @db.Uuid
+  purpose      FilePurpose
+  patientId    String?           @map("patient_id") @db.Uuid
+  status       FileStatus        @default(pending)
+  rejectReason FileRejectReason? @map("reject_reason")
+  /// `t/{tenantId}/files/{yyyy}/{mm}/{id}` : jamais de nom ni de donnée patient.
+  objectKey    String            @unique @map("object_key")
+  /// NULL une fois le fichier supprimé (effacement cryptographique, migration 20261012000110).
+  wrappedKey   Bytes?            @map("wrapped_key")
+  /// Nom d'origine assaini, chiffré (FieldCrypto).
+  originalName Bytes             @map("original_name")
+  /// Type détecté sur le contenu (jamais le type déclaré).
+  mimeType     String            @map("mime_type")
+  sizeBytes    BigInt            @map("size_bytes")
+  /// Empreinte SHA-256 du contenu en clair stocké (après retrait des métadonnées).
+  sha256       String            @db.Char(64)
+  createdBy    String            @map("created_by") @db.Uuid
+  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  availableAt  DateTime?         @map("available_at") @db.Timestamptz(6)
+  deletedAt    DateTime?         @map("deleted_at") @db.Timestamptz(6)
+  scanAttempts Int               @default(0) @map("scan_attempts") @db.SmallInt
+
+  @@id([tenantId, id])
+  @@index([tenantId, status])
+  @@map("files")
+  @@schema("tenant")
+}

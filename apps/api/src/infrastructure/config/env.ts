@@ -139,6 +139,8 @@ export const envSchema = z.object({
   OTEL_SERVICE_NAME: z.string().min(1).default('ghmt-api'),
   /** Métriques Prometheus sur un port interne, jamais routé par le proxy. */
   METRICS_PORT: z.coerce.number().int().min(1).max(65535).default(9464),
+  /** Adresse d'écoute des métriques : en production, l'IP de l'API sur le réseau `observability` (les autres réseaux ne le joignent pas). */
+  METRICS_HOST: z.union([z.ipv4(), z.ipv6()]).default('0.0.0.0'),
 });
 
 type ParsedEnv = z.infer<typeof envSchema>;

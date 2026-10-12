@@ -6,7 +6,7 @@
 // Les variables suivent apps/api/.env.test (fichier commun, phase 0) : toute variable ajoutée là doit l'être ici
 // (le test de dérive de scripts/ci/tests/generate-env-test.test.mjs le signale en local).
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, writeFileSync } from 'node:fs';
+import { closeSync, fchmodSync, openSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -77,12 +77,22 @@ function main() {
     strict: true,
   });
   const sortie = resolve(values.output);
-  if (existsSync(sortie) && !values.force) {
-    throw new Error(`${sortie} existe déjà : relancer avec --force pour l'écraser.`);
-  }
   const contenu = buildEnvTest({ database: values.database, redisDb: Number(values['redis-db']) });
-  writeFileSync(sortie, contenu, { mode: 0o600 });
-  chmodSync(sortie, 0o600); // `mode` ne s'applique qu'à la création (cas --force)
+  // Sans --force : création exclusive atomique (`wx`), aucun intervalle entre le contrôle d'existence et l'écriture.
+  // Droits fixés sur le descripteur ouvert (`mode` ne s'applique qu'à la création, cas --force), jamais par chemin.
+  let fd;
+  try {
+    fd = openSync(sortie, values.force ? 'w' : 'wx', 0o600);
+  } catch (error) {
+    if (error?.code === 'EEXIST') throw new Error(`${sortie} existe déjà : relancer avec --force pour l'écraser.`);
+    throw error;
+  }
+  try {
+    fchmodSync(fd, 0o600);
+    writeFileSync(fd, contenu);
+  } finally {
+    closeSync(fd);
+  }
   const nombre = contenu.split('\n').filter((l) => /^[A-Z_]+=/.test(l)).length;
   process.stdout.write(`OK : ${sortie} généré (${nombre} variables, secrets aléatoires).\n`);
 }

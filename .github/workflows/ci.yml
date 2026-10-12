@@ -93,6 +93,9 @@ jobs:
           JWT_AUDIENCE: ghmt-api
           MAIL_FROM: GHMT <ci@ci.invalid>
           SMTP_HOST: smtp.ci.invalid
+          S3_ENDPOINT: https://s3.ci.invalid
+          S3_BUCKET_QUARANTINE: ghmt-ci-quarantine
+          S3_BUCKET_DOCUMENTS: ghmt-ci-documents
         run: bash infra/deploy/check-pinned-images.sh infra/docker-compose.yml infra/deploy/compose.prod.yml
 
   workflows:
